@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
+import '../../core/media_types.dart';
 import '../../data/db/app_database.dart';
 import '../../data/repositories/entity_repository.dart';
 import '../../data/repositories/field_value_repository.dart';
@@ -191,6 +193,29 @@ class ScraperRegistry {
             updatedAt: Value(DateTime.now().toUtc().millisecondsSinceEpoch),
           ),
         );
+      }
+    }
+
+    // If resource has mediaType == 'other' or null, refine it if a known file extension is present
+    if (input.resource.mediaType == null || input.resource.mediaType == 'other') {
+      final checkPath = input.resource.uri ?? input.fileName;
+      if (checkPath != null && checkPath.isNotEmpty) {
+        final uri = Uri.tryParse(checkPath);
+        final pathToCheck = uri != null && uri.path.isNotEmpty ? uri.path : checkPath;
+        if (p.extension(pathToCheck).isNotEmpty) {
+          final refinedType = MediaTypes.detectMediaType(pathToCheck);
+          final refinedMime = MediaTypes.detectMime(pathToCheck);
+          if (refinedType != 'other') {
+            await _resourceRepo.updateResource(
+              ResourcesCompanion(
+                id: Value(input.resource.id),
+                mediaType: Value(refinedType),
+                mime: Value(refinedMime),
+                updatedAt: Value(DateTime.now().toUtc().millisecondsSinceEpoch),
+              ),
+            );
+          }
+        }
       }
     }
 
