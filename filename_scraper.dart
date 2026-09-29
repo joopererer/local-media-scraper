@@ -13,6 +13,15 @@ class FileNameScraper implements Scraper {
   String get description => '从文件名中自动识别番号、年份、集数、括号标签及制作社';
 
   @override
+  List<String> get targetSupertags => const [];
+
+  @override
+  RegExp? get patternRegex => null;
+
+  @override
+  List<String>? get supertagToBackfill => null;
+
+  @override
   bool canHandle(ScrapeInput input) {
     final name = input.fileName ?? input.resource.title;
     return name != null && name.trim().isNotEmpty;

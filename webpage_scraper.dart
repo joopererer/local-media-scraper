@@ -18,6 +18,15 @@ class WebPageScraper implements Scraper {
   String get description => '从网页 URL 抓取 OpenGraph 元数据、标题、简介与封面预览';
 
   @override
+  List<String> get targetSupertags => const [];
+
+  @override
+  RegExp? get patternRegex => null;
+
+  @override
+  List<String>? get supertagToBackfill => null;
+
+  @override
   bool canHandle(ScrapeInput input) {
     final targetUrl = _getTargetUrl(input);
     if (targetUrl == null || targetUrl.isEmpty) return false;

@@ -1,3 +1,5 @@
+import 'package:http/http.dart' as http;
+
 import '../../data/db/app_database.dart';
 
 /// Input provided to a [Scraper].
@@ -7,6 +9,7 @@ class ScrapeInput {
   final String? sourceUrl;
   final String? referrerUrl;
   final Map<String, List<FieldValue>> existingFields;
+  final List<Tag> existingTags;
 
   const ScrapeInput({
     required this.resource,
@@ -14,7 +17,11 @@ class ScrapeInput {
     this.sourceUrl,
     this.referrerUrl,
     this.existingFields = const {},
+    this.existingTags = const [],
   });
+
+  Set<String> get existingTagNames =>
+      existingTags.map((t) => t.name.toLowerCase()).toSet();
 }
 
 /// A field proposed by a scraper.
@@ -68,13 +75,21 @@ class ScrapeResult {
       fields.isEmpty && tags.isEmpty && proposedTitle == null && previewImageUrl == null;
 }
 
-/// Execution context for scrapers (e.g. logging, cancellation).
+/// Execution context for scrapers (e.g. logging, API keys, proxy, http client).
 class ScrapeContext {
   final void Function(String message)? onLog;
+  final Map<String, dynamic> config;
+  final http.Client? client;
 
-  const ScrapeContext({this.onLog});
+  const ScrapeContext({
+    this.onLog,
+    this.config = const {},
+    this.client,
+  });
 
   void log(String message) => onLog?.call(message);
+
+  String? getConfig(String key) => config[key]?.toString();
 }
 
 /// Pluggable interface for metadata scrapers.
@@ -82,6 +97,18 @@ abstract class Scraper {
   String get id;
   String get displayName;
   String get description;
+
+  /// Target supertags that this scraper specializes in (e.g. `['电影', 'Movie']`, `['番剧', 'Anime']`).
+  /// An empty list means universal / not constrained to specific supertags.
+  List<String> get targetSupertags => const [];
+
+  /// Optional regular expression pattern to detect if an input matches this scraper's domain
+  /// (e.g. `r'([A-Z]{3,5}-\d{3,5})'` or `r'(BV[a-zA-Z0-9]{10})'` or `r'douban\.com'`).
+  RegExp? get patternRegex => null;
+
+  /// If this scraper matches by [patternRegex], optionally backfill this supertag/tag
+  /// to the resource (e.g. `['影视', '电影']` or `['番号', 'AV']`).
+  List<String>? get supertagToBackfill => null;
 
   /// Whether this scraper can handle the provided input.
   bool canHandle(ScrapeInput input);
