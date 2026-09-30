@@ -94,9 +94,12 @@ class ScraperRegistry {
 
   YamlScraperLoader get yamlLoader => _yamlLoader;
 
-  /// Registers a custom scraper.
+  /// Registers a custom or overridden scraper.
   void registerScraper(Scraper scraper) {
-    if (!_scrapers.any((s) => s.id == scraper.id)) {
+    final idx = _scrapers.indexWhere((s) => s.id == scraper.id);
+    if (idx >= 0) {
+      _scrapers[idx] = scraper;
+    } else {
       _scrapers.add(scraper);
     }
   }
@@ -206,37 +209,59 @@ class ScraperRegistry {
     await _ensureDefaultSupertags();
   }
 
-  /// Ensures that standard Supertags like JAV exist in the database with their schema fields.
+  /// Ensures that standard Supertags (JAV, 电影, 番剧) exist in the database with their schema fields.
   Future<void> _ensureDefaultSupertags() async {
     try {
-      final javTag = await _tagRepo.findOrCreateTag('JAV');
-      final existingFields = await _tagRepo.getFieldsForTag(javTag.id);
+      final defaultSupertags = <String, List<(String, String, String, String?, bool, int)>>{
+        'JAV': [
+          ('code', '番号', 'string', null, false, 0),
+          ('title', '片名', 'string', null, false, 1),
+          ('studio', '片商', 'entity', 'studio', false, 2),
+          ('actress', '女优', 'entity', 'actress', true, 3),
+          ('year', '发行年份', 'number', null, false, 4),
+        ],
+        '电影': [
+          ('title', '片名', 'string', null, false, 0),
+          ('director', '导演', 'entity', 'director', false, 1),
+          ('actress', '主要演员', 'entity', 'actress', true, 2),
+          ('year', '发行年份', 'number', null, false, 3),
+          ('rating', '豆瓣/TMDB评分', 'number', null, false, 4),
+          ('summary', '剧情简介', 'string', null, false, 5),
+        ],
+        '番剧': [
+          ('title', '中文译名', 'string', null, false, 0),
+          ('original_title', '日文原名', 'string', null, false, 1),
+          ('year', '放送年份', 'number', null, false, 2),
+          ('rating', '评分', 'number', null, false, 3),
+          ('summary', '简介', 'string', null, false, 4),
+        ],
+      };
 
-      final defaultFields = [
-        ('code', '番号', 'string', null, false, 0),
-        ('title', '片名', 'string', null, false, 1),
-        ('studio', '片商', 'entity', 'studio', false, 2),
-        ('actress', '女优', 'entity', 'actress', true, 3),
-        ('year', '发行年份', 'number', null, false, 4),
-      ];
+      for (final entry in defaultSupertags.entries) {
+        final tagName = entry.key;
+        final fields = entry.value;
 
-      for (final (key, label, valueType, entityType, multi, sortOrder) in defaultFields) {
-        final existingField = existingFields.where((f) => f.key == key).firstOrNull;
-        if (existingField == null) {
-          await _tagRepo.createTagField(
-            tagId: javTag.id,
-            key: key,
-            label: label,
-            valueType: valueType,
-            entityType: entityType,
-            multi: multi,
-            sortOrder: sortOrder,
-          );
-        } else if (existingField.label != label) {
-          await _tagRepo.updateTagField(
-            id: existingField.id,
-            label: label,
-          );
+        final tag = await _tagRepo.findOrCreateTag(tagName);
+        final existingFields = await _tagRepo.getFieldsForTag(tag.id);
+
+        for (final (key, label, valueType, entityType, multi, sortOrder) in fields) {
+          final existingField = existingFields.where((f) => f.key == key).firstOrNull;
+          if (existingField == null) {
+            await _tagRepo.createTagField(
+              tagId: tag.id,
+              key: key,
+              label: label,
+              valueType: valueType,
+              entityType: entityType,
+              multi: multi,
+              sortOrder: sortOrder,
+            );
+          } else if (existingField.label != label) {
+            await _tagRepo.updateTagField(
+              id: existingField.id,
+              label: label,
+            );
+          }
         }
       }
     } catch (e) {
@@ -304,7 +329,7 @@ class ScraperRegistry {
           final alreadyHas = workingExistingTags.any((t) =>
               stBackfill.any((st) => t.name.toLowerCase() == st.toLowerCase()));
           if (!alreadyHas) {
-            final tagId = await _findOrCreateTagPath(stBackfill);
+            final tagId = await _findOrCreateTagPath(stBackfill, libraryId: input.resource.libraryId);
             if (tagId != null) {
               await _tagRepo.attachTagToResource(
                 input.resource.id,
@@ -380,7 +405,7 @@ class ScraperRegistry {
         // Apply proposed tags
         for (final pt in result.tags) {
           if (pt.tagPath.isEmpty) continue;
-          final tagId = await _findOrCreateTagPath(pt.tagPath);
+          final tagId = await _findOrCreateTagPath(pt.tagPath, libraryId: input.resource.libraryId);
           if (tagId != null) {
             await _tagRepo.attachTagToResource(
               input.resource.id,
@@ -520,13 +545,17 @@ class ScraperRegistry {
     return executePipeline(input, ctx: ctx);
   }
 
-  Future<String?> _findOrCreateTagPath(List<String> path) async {
+  Future<String?> _findOrCreateTagPath(List<String> path, {String? libraryId}) async {
     String? currentParentId;
     for (final seg in path) {
       final trimmed = seg.trim();
       if (trimmed.isEmpty) continue;
 
-      final tag = await _tagRepo.findOrCreateTag(trimmed, parentId: currentParentId);
+      final tag = await _tagRepo.findOrCreateTag(
+        trimmed,
+        parentId: currentParentId,
+        libraryId: libraryId,
+      );
       currentParentId = tag.id;
     }
     return currentParentId;

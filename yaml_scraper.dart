@@ -8,7 +8,11 @@ import 'scraper.dart';
 class YamlFieldRule {
   final String key;
   final String source;
+  final String? fallback;
+  final String? prefix;
+  final String? suffix;
   final String? entityType;
+  final String valueType; // 'string' or 'number'
   final bool isTitle;
   final bool isPreviewImage;
   final double confidence;
@@ -16,7 +20,11 @@ class YamlFieldRule {
   const YamlFieldRule({
     required this.key,
     required this.source,
+    this.fallback,
+    this.prefix,
+    this.suffix,
     this.entityType,
+    this.valueType = 'string',
     this.isTitle = false,
     this.isPreviewImage = false,
     this.confidence = 0.85,
@@ -26,14 +34,21 @@ class YamlFieldRule {
     if (map is! Map) {
       throw ArgumentError('Field rule must be a map');
     }
+    final key = map['key']?.toString() ?? '';
+    final valType = map['value_type']?.toString().toLowerCase() ??
+        (key == 'rating' || key == 'year' ? 'number' : 'string');
     return YamlFieldRule(
-      key: map['key']?.toString() ?? '',
+      key: key,
       source: map['source']?.toString() ?? '',
+      fallback: map['fallback']?.toString(),
+      prefix: map['prefix']?.toString(),
+      suffix: map['suffix']?.toString(),
       entityType: map['entity_type']?.toString(),
-      isTitle: map['is_title'] == true || map['key'] == 'title',
+      valueType: valType,
+      isTitle: map['is_title'] == true || key == 'title',
       isPreviewImage: map['is_preview_image'] == true ||
-          map['key'] == 'cover' ||
-          map['key'] == 'poster',
+          key == 'cover' ||
+          key == 'poster',
       confidence: (map['confidence'] is num)
           ? (map['confidence'] as num).toDouble()
           : 0.85,
@@ -257,13 +272,18 @@ class YamlScraper implements Scraper {
           requestUrl = requestUrl.replaceAll('{0}', Uri.encodeComponent(fullMatch));
         }
         for (int i = 1; i <= match.groupCount; i++) {
-          final val = match.group(i);
-          if (val != null) {
-            requestUrl = requestUrl.replaceAll('{$i}', Uri.encodeComponent(val));
-          }
+          final val = match.group(i) ?? '';
+          requestUrl = requestUrl.replaceAll('{$i}', Uri.encodeComponent(val));
         }
       }
       requestUrl = requestUrl.replaceAll('{input}', Uri.encodeComponent(targetStr));
+
+      // Replace {config:key} placeholders from ScrapeContext
+      requestUrl = requestUrl.replaceAllMapped(RegExp(r'\{config:([a-zA-Z0-9_]+)\}'), (m) {
+        final cfgKey = m.group(1)!;
+        final cfgVal = ctx.getConfig(cfgKey);
+        return cfgVal != null && cfgVal.isNotEmpty ? Uri.encodeComponent(cfgVal) : '';
+      });
 
       // Guard: if any placeholder like {1}, {2} remains unreplaced, abort request
       if (RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(requestUrl)) {
@@ -271,18 +291,25 @@ class YamlScraper implements Scraper {
       } else {
         try {
           ctx.log('YamlScraper($_id): GET $requestUrl');
+          final effectiveHeaders = <String, String>{
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Cookie': 'existmag=all; age=verified; over18=1',
+          };
+          _headers.forEach((k, v) {
+            // Support {config:key} in headers
+            effectiveHeaders[k] = v.replaceAllMapped(RegExp(r'\{config:([a-zA-Z0-9_]+)\}'), (m) {
+              return ctx.getConfig(m.group(1)!) ?? '';
+            });
+          });
+
           final resp = await client.get(
             Uri.parse(requestUrl),
-            headers: {
-              'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Cookie': 'existmag=all; age=verified; over18=1',
-              ..._headers,
-            },
+            headers: effectiveHeaders,
           ).timeout(Duration(seconds: _timeoutSeconds));
 
           if (resp.statusCode == 200) {
-            responseBody = resp.body;
+            responseBody = utf8.decode(resp.bodyBytes, allowMalformed: true);
             try {
               jsonRoot = jsonDecode(responseBody);
             } catch (_) {
@@ -303,15 +330,32 @@ class YamlScraper implements Scraper {
     String? previewImageUrl;
 
     for (final rule in _fields) {
-      final val = _resolveSource(
+      dynamic val = _resolveSource(
         rule.source,
         rawText: responseBody ?? targetStr,
         jsonData: jsonRoot,
         match: match,
       );
 
+      // Fallback if primary source produced null or empty string
+      if ((val == null || val.toString().trim().isEmpty) && rule.fallback != null) {
+        val = _resolveSource(
+          rule.fallback!,
+          rawText: responseBody ?? targetStr,
+          jsonData: jsonRoot,
+          match: match,
+        );
+      }
+
       if (val != null && val.toString().trim().isNotEmpty) {
-        final valStr = val.toString().trim();
+        var valStr = val.toString().trim();
+        if (rule.prefix != null && !valStr.startsWith(rule.prefix!)) {
+          valStr = '${rule.prefix}$valStr';
+        }
+        if (rule.suffix != null && !valStr.endsWith(rule.suffix!)) {
+          valStr = '$valStr${rule.suffix}';
+        }
+
         if (rule.isTitle) {
           proposedTitle = valStr;
         }
@@ -319,9 +363,15 @@ class YamlScraper implements Scraper {
           previewImageUrl = valStr;
         }
 
+        double? valNum;
+        if (rule.valueType == 'number') {
+          valNum = double.tryParse(valStr);
+        }
+
         extractedFields.add(ProposedField(
           key: rule.key,
           valueText: valStr,
+          valueNum: valNum,
           entityName: rule.entityType != null ? valStr : null,
           entityType: rule.entityType,
           confidence: rule.confidence,
@@ -330,10 +380,10 @@ class YamlScraper implements Scraper {
       }
     }
 
-    // 4. Extract tags
+    // 4. Extract tags with multi-level path support & wildcard iteration
     final extractedTags = <ProposedTag>[];
     for (final tagDef in _tags) {
-      if (tagDef.startsWith('json:') || tagDef.startsWith('regex:')) {
+      if (tagDef.startsWith('json:')) {
         final val = _resolveSource(
           tagDef,
           rawText: responseBody ?? targetStr,
@@ -345,16 +395,38 @@ class YamlScraper implements Scraper {
             for (final item in val) {
               final s = item.toString().trim();
               if (s.isNotEmpty) {
-                extractedTags.add(ProposedTag(tagPath: [s], confidence: 0.85));
+                final parts = s.split('/').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+                if (parts.isNotEmpty) {
+                  extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.85));
+                }
               }
             }
           } else {
             final s = val.toString().trim();
             if (s.isNotEmpty) {
-              extractedTags.add(ProposedTag(tagPath: [s], confidence: 0.85));
+              final parts = s.split('/').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+              if (parts.isNotEmpty) {
+                extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.85));
+              }
             }
           }
         }
+      } else if (tagDef.startsWith('regex:')) {
+        // Multi-match support for regex tags
+        final patternStr = tagDef.substring(6);
+        try {
+          final r = RegExp(patternStr, caseSensitive: false);
+          final matches = r.allMatches(responseBody ?? targetStr);
+          for (final m in matches) {
+            final s = (m.groupCount >= 1 ? m.group(1) : m.group(0))?.trim();
+            if (s != null && s.isNotEmpty) {
+              final parts = s.split('/').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+              if (parts.isNotEmpty) {
+                extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.85));
+              }
+            }
+          }
+        } catch (_) {}
       } else {
         // Static or parameterized tag path e.g. "JAV / 女优 / {actress}"
         String resolvedTag = tagDef;
@@ -391,15 +463,7 @@ class YamlScraper implements Scraper {
     if (source.startsWith('json:')) {
       if (jsonData == null) return null;
       final path = source.substring(5).split('.');
-      dynamic cur = jsonData;
-      for (final p in path) {
-        if (cur is Map && cur.containsKey(p)) {
-          cur = cur[p];
-        } else {
-          return null;
-        }
-      }
-      return cur;
+      return _navigateJson(jsonData, path);
     } else if (source.startsWith('regex:')) {
       final pattern = source.substring(6);
       final r = RegExp(pattern, caseSensitive: false);
@@ -418,6 +482,57 @@ class YamlScraper implements Scraper {
     } else if (source.startsWith('static:')) {
       return source.substring(7);
     }
+    return null;
+  }
+
+  /// Recursively traverses JSON structures supporting wildcards ('*') and array indices ('items[0]').
+  dynamic _navigateJson(dynamic root, List<String> parts) {
+    if (parts.isEmpty) return root;
+    final head = parts.first;
+    final tail = parts.sublist(1);
+
+    if (root == null) return null;
+
+    if (root is List) {
+      if (head == '*') {
+        final list = <dynamic>[];
+        for (final item in root) {
+          final res = _navigateJson(item, tail);
+          if (res != null) {
+            if (res is List) {
+              list.addAll(res);
+            } else {
+              list.add(res);
+            }
+          }
+        }
+        return list.isNotEmpty ? list : null;
+      }
+      final index = int.tryParse(head);
+      if (index != null && index >= 0 && index < root.length) {
+        return _navigateJson(root[index], tail);
+      }
+      return null;
+    }
+
+    if (root is Map) {
+      // Check for array index notation e.g. "items[0]"
+      final arrayMatch = RegExp(r'^([a-zA-Z0-9_]+)\[(\d+)\]$').firstMatch(head);
+      if (arrayMatch != null) {
+        final key = arrayMatch.group(1)!;
+        final idx = int.parse(arrayMatch.group(2)!);
+        final listVal = root[key];
+        if (listVal is List && idx >= 0 && idx < listVal.length) {
+          return _navigateJson(listVal[idx], tail);
+        }
+        return null;
+      }
+
+      if (root.containsKey(head)) {
+        return _navigateJson(root[head], tail);
+      }
+    }
+
     return null;
   }
 }

@@ -61,11 +61,164 @@ tags:
   - 'Bilibili'
 ''';
 
-  /// Example YAML configuration for custom JAV online scraping via mirror or API.
-  static const String sampleJavBusYaml = '''
-id: javbus_custom
-name: JavBus 自定义搜刮器 (示例)
-description: 声明式 JavBus 插件示例，支持从网页抽取标题、女优、封面与发行日期
+  /// Default YAML configuration for Douban.
+  static const String defaultDoubanYaml = '''
+id: douban
+name: 豆瓣 (Douban)
+description: 抓取中文影视图书元数据（评分、导演、演员、海报与简介）
+priority: 85
+media_types:
+  - video
+target_supertags:
+  - 电影
+  - Movie
+  - 影视
+pattern: 'douban\\.com/subject/(\\d+)|\\[(?:douban|db)[:\\-](\\d+)\\]'
+supertag_to_backfill:
+  - 电影
+request:
+  url_template: 'https://movie.douban.com/subject/{1}{2}/'
+  timeout_seconds: 10
+fields:
+  - key: title
+    source: 'regex:<span property="v:itemreviewed">(.*?)</span>'
+    is_title: true
+    confidence: 0.95
+  - key: rating
+    source: 'regex:<strong class="ll rating_num" property="v:average">(.*?)</strong>'
+    value_type: number
+    confidence: 0.9
+  - key: director
+    source: 'regex:<a [^>]*rel="v:directedBy"[^>]*>(.*?)</a>'
+    entity_type: director
+    confidence: 0.9
+  - key: actress
+    source: 'regex:<a [^>]*rel="v:starring"[^>]*>(.*?)</a>'
+    entity_type: actress
+    confidence: 0.9
+  - key: year
+    source: 'regex:<span class="year">\\((\\d{4})\\)</span>'
+    value_type: number
+    confidence: 0.9
+  - key: summary
+    source: 'regex:<span property="v:summary"[^>]*>([\\s\\S]*?)</span>'
+    confidence: 0.85
+  - key: cover
+    source: 'regex:<img [^>]*src="([^"]+)"[^>]*title="点击看更多海报"'
+    is_preview_image: true
+    confidence: 0.95
+tags:
+  - 'regex:<span property="v:genre">(.*?)</span>'
+  - '豆瓣'
+  - '影视 / 华语电影'
+  - '影视 / {year}'
+  - '影视 / 导演 / {director}'
+''';
+
+  /// Default YAML configuration for Bangumi.
+  static const String defaultBangumiYaml = '''
+id: bangumi
+name: Bangumi 番组计划
+description: 提取二次元动画、漫画元数据（日文原名、中文名、制作公司与封面）
+priority: 85
+media_types:
+  - video
+target_supertags:
+  - 番剧
+  - Anime
+  - 动画
+  - ACG
+pattern: '(?:bgm\\.tv|bangumi\\.tv)/subject/(\\d+)|\\[(?:bangumi|bgm)[:\\-](\\d+)\\]'
+supertag_to_backfill:
+  - 番剧
+request:
+  url_template: 'https://api.bgm.tv/v0/subjects/{1}{2}'
+  timeout_seconds: 10
+  headers:
+    Accept: 'application/json'
+fields:
+  - key: title
+    source: 'json:name_cn'
+    fallback: 'json:name'
+    is_title: true
+    confidence: 0.95
+  - key: original_title
+    source: 'json:name'
+    confidence: 0.9
+  - key: summary
+    source: 'json:summary'
+    confidence: 0.85
+  - key: rating
+    source: 'json:rating.score'
+    value_type: number
+    confidence: 0.9
+  - key: year
+    source: 'regex:date":\\s*"(\\d{4})'
+    value_type: number
+    confidence: 0.9
+  - key: cover
+    source: 'json:images.large'
+    is_preview_image: true
+    confidence: 0.95
+tags:
+  - 'json:tags.*.name'
+  - '番剧'
+  - '番剧 / {year}'
+''';
+
+  /// Default YAML configuration for TMDB.
+  static const String defaultTmdbYaml = '''
+id: tmdb
+name: The Movie Database (TMDB)
+description: 国际影视剧集元数据刮削（支持 API Key 与海报）
+priority: 90
+media_types:
+  - video
+target_supertags:
+  - 电影
+  - Movie
+  - 影视
+pattern: 'themoviedb\\.org/movie/(\\d+)|tmdb\\.org/movie/(\\d+)'
+supertag_to_backfill:
+  - 电影
+request:
+  url_template: 'https://api.themoviedb.org/3/movie/{1}{2}?api_key={config:tmdb_api_key}&language=zh-CN'
+  timeout_seconds: 10
+fields:
+  - key: title
+    source: 'json:title'
+    is_title: true
+    confidence: 0.95
+  - key: original_title
+    source: 'json:original_title'
+    confidence: 0.9
+  - key: summary
+    source: 'json:overview'
+    confidence: 0.85
+  - key: rating
+    source: 'json:vote_average'
+    value_type: number
+    confidence: 0.9
+  - key: year
+    source: 'regex:^(\\d{4})'
+    value_type: number
+    confidence: 0.9
+  - key: cover
+    source: 'json:poster_path'
+    prefix: 'https://image.tmdb.org/t/p/w500'
+    is_preview_image: true
+    confidence: 0.95
+tags:
+  - 'json:genres.*.name'
+  - '电影'
+  - '电影 / {year}'
+''';
+
+  /// Default YAML configuration for custom JAV online scraping.
+  static const String defaultJavBusYaml = '''
+id: javbus
+name: JavBus 搜刮器
+description: 根据番号抽取标题、女优、封面、制作商与发行年份
 priority: 70
 media_types:
   - video
@@ -93,13 +246,21 @@ fields:
     source: 'regex:<span class="genre"><a href="[^"]*star[^"]*">([^<]+)</a></span>'
     entity_type: actress
     confidence: 0.95
+  - key: studio
+    source: 'regex:<span class="header">制作商:</span>\\s*<a href="[^"]*">([^<]+)</a>'
+    entity_type: studio
+    confidence: 0.95
   - key: year
     source: 'regex:<span class="header">发行时间:</span>\\s*([0-9]{4})'
+    value_type: number
     confidence: 0.9
 tags:
   - 'JAV'
   - 'JAV / 女优 / {actress}'
+  - 'JAV / 片商 / {studio}'
 ''';
+
+  static const String sampleJavBusYaml = defaultJavBusYaml;
 
   /// Ensures directory exists and writes default examples if missing.
   Future<void> ensureDirectoryAndSamples() async {
@@ -107,13 +268,19 @@ tags:
       if (!await pluginsDirectory.exists()) {
         await pluginsDirectory.create(recursive: true);
       }
-      final sampleBili = File('${pluginsDirectory.path}/bilibili.yaml');
-      if (!await sampleBili.exists()) {
-        await sampleBili.writeAsString(defaultBilibiliYaml.trim());
-      }
-      final sampleJav = File('${pluginsDirectory.path}/javbus_sample.yaml');
-      if (!await sampleJav.exists()) {
-        await sampleJav.writeAsString(sampleJavBusYaml.trim());
+      final filesToEnsure = {
+        'bilibili.yaml': defaultBilibiliYaml,
+        'javbus.yaml': defaultJavBusYaml,
+        'douban.yaml': defaultDoubanYaml,
+        'bangumi.yaml': defaultBangumiYaml,
+        'tmdb.yaml': defaultTmdbYaml,
+      };
+
+      for (final entry in filesToEnsure.entries) {
+        final f = File('${pluginsDirectory.path}/${entry.key}');
+        if (!await f.exists()) {
+          await f.writeAsString(entry.value.trim());
+        }
       }
     } catch (e) {
       debugPrint('YamlScraperLoader: unable to create default sample: $e');
