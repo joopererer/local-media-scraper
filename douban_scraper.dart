@@ -18,6 +18,9 @@ class DoubanScraper implements Scraper {
   String get description => '中文影视与图书元数据刮削 (提取译名、演职员/作者、豆瓣评分与海报)';
 
   @override
+  int get priority => 85;
+
+  @override
   List<String> get targetSupertags => const ['电影', 'Movie', '图书', '书籍', 'Book'];
 
   @override

@@ -23,6 +23,9 @@ class YamlScraperLoader {
 id: bilibili
 name: Bilibili 视频刮削器
 description: 根据 BV 号自动抓取 B 站视频标题、UP 主、封面与分区标签
+priority: 75
+media_types:
+  - video
 target_supertags:
   - 视频
   - Bilibili
@@ -58,15 +61,59 @@ tags:
   - 'Bilibili'
 ''';
 
-  /// Ensures directory exists and writes default example if empty.
+  /// Example YAML configuration for custom JAV online scraping via mirror or API.
+  static const String sampleJavBusYaml = '''
+id: javbus_custom
+name: JavBus 自定义搜刮器 (示例)
+description: 声明式 JavBus 插件示例，支持从网页抽取标题、女优、封面与发行日期
+priority: 70
+media_types:
+  - video
+target_supertags:
+  - JAV
+pattern: '(?<![a-zA-Z0-9])([a-zA-Z]{2,6})[-_](\\d{2,5})(?![a-zA-Z0-9])'
+supertag_to_backfill:
+  - JAV
+request:
+  url_template: 'https://www.javbus.com/{1}-{2}'
+  timeout_seconds: 10
+fields:
+  - key: code
+    source: 'match:0'
+    confidence: 1.0
+  - key: title
+    source: 'regex:<title>(.*?)</title>'
+    is_title: true
+    confidence: 0.9
+  - key: cover
+    source: 'regex:<a class="bigImage" href="([^"]+)"'
+    is_preview_image: true
+    confidence: 0.95
+  - key: actress
+    source: 'regex:<span class="genre"><a href="[^"]*star[^"]*">([^<]+)</a></span>'
+    entity_type: actress
+    confidence: 0.95
+  - key: year
+    source: 'regex:<span class="header">发行时间:</span>\\s*([0-9]{4})'
+    confidence: 0.9
+tags:
+  - 'JAV'
+  - 'JAV / 女优 / {actress}'
+''';
+
+  /// Ensures directory exists and writes default examples if missing.
   Future<void> ensureDirectoryAndSamples() async {
     try {
       if (!await pluginsDirectory.exists()) {
         await pluginsDirectory.create(recursive: true);
       }
-      final sampleFile = File('${pluginsDirectory.path}/bilibili.yaml');
-      if (!await sampleFile.exists()) {
-        await sampleFile.writeAsString(defaultBilibiliYaml.trim());
+      final sampleBili = File('${pluginsDirectory.path}/bilibili.yaml');
+      if (!await sampleBili.exists()) {
+        await sampleBili.writeAsString(defaultBilibiliYaml.trim());
+      }
+      final sampleJav = File('${pluginsDirectory.path}/javbus_sample.yaml');
+      if (!await sampleJav.exists()) {
+        await sampleJav.writeAsString(sampleJavBusYaml.trim());
       }
     } catch (e) {
       debugPrint('YamlScraperLoader: unable to create default sample: $e');

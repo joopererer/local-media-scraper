@@ -18,6 +18,9 @@ class WebPageScraper implements Scraper {
   String get description => '从网页 URL 抓取 OpenGraph 元数据、标题、简介与封面预览';
 
   @override
+  int get priority => 10;
+
+  @override
   List<String> get targetSupertags => const [];
 
   @override

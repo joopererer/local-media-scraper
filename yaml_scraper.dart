@@ -46,12 +46,14 @@ class YamlScraper implements Scraper {
   final String _id;
   final String _displayName;
   final String _description;
+  final List<String> _mediaTypes;
   final List<String> _targetSupertags;
   final RegExp? _patternRegex;
   final List<String>? _supertagToBackfill;
   final String? _urlTemplate;
   final Map<String, String> _headers;
   final int _timeoutSeconds;
+  final int _priority;
   final List<YamlFieldRule> _fields;
   final List<String> _tags;
   final http.Client? _client;
@@ -60,6 +62,8 @@ class YamlScraper implements Scraper {
     required String id,
     required String displayName,
     required String description,
+    int priority = 60,
+    List<String> mediaTypes = const [],
     List<String> targetSupertags = const [],
     RegExp? patternRegex,
     List<String>? supertagToBackfill,
@@ -72,6 +76,8 @@ class YamlScraper implements Scraper {
   })  : _id = id,
         _displayName = displayName,
         _description = description,
+        _priority = priority,
+        _mediaTypes = mediaTypes,
         _targetSupertags = targetSupertags,
         _patternRegex = patternRegex,
         _supertagToBackfill = supertagToBackfill,
@@ -91,6 +97,14 @@ class YamlScraper implements Scraper {
     final id = doc['id']?.toString() ?? 'custom_yaml';
     final name = doc['name']?.toString() ?? doc['displayName']?.toString() ?? id;
     final desc = doc['description']?.toString() ?? 'Declarative YAML scraper';
+
+    final mediaTypes = <String>[];
+    final mediaRaw = doc['media_types'] ?? doc['target_media_types'];
+    if (mediaRaw is Iterable) {
+      for (final item in mediaRaw) {
+        mediaTypes.add(item.toString().toLowerCase().trim());
+      }
+    }
 
     final targetSt = <String>[];
     final targetRaw = doc['target_supertags'];
@@ -136,6 +150,8 @@ class YamlScraper implements Scraper {
       }
     }
 
+    final priority = (doc['priority'] is num) ? (doc['priority'] as num).toInt() : 60;
+
     final tagRules = <String>[];
     final tagsRaw = doc['tags'];
     if (tagsRaw is Iterable) {
@@ -148,6 +164,8 @@ class YamlScraper implements Scraper {
       id: id,
       displayName: name,
       description: desc,
+      priority: priority,
+      mediaTypes: mediaTypes,
       targetSupertags: targetSt,
       patternRegex: pattern,
       supertagToBackfill: backfill,
@@ -170,6 +188,9 @@ class YamlScraper implements Scraper {
   String get description => _description;
 
   @override
+  int get priority => _priority;
+
+  @override
   List<String> get targetSupertags => _targetSupertags;
 
   @override
@@ -178,11 +199,21 @@ class YamlScraper implements Scraper {
   @override
   List<String>? get supertagToBackfill => _supertagToBackfill;
 
+  List<String> get mediaTypes => List.unmodifiable(_mediaTypes);
+
   @override
   bool canHandle(ScrapeInput input) {
+    // 0. Check media type restriction if specified
+    if (_mediaTypes.isNotEmpty) {
+      final resType = input.resource.mediaType?.toLowerCase();
+      if (resType != null && resType.isNotEmpty && !_mediaTypes.contains(resType)) {
+        return false;
+      }
+    }
+
     // 1. Check Supertags
     final existingTags = input.existingTagNames;
-    if (_targetSupertags.any((st) => existingTags.contains(st.toLowerCase()))) {
+    if (_targetSupertags.isNotEmpty && _targetSupertags.any((st) => existingTags.contains(st.toLowerCase()))) {
       return true;
     }
 
@@ -221,6 +252,10 @@ class YamlScraper implements Scraper {
     if (tmpl != null) {
       String requestUrl = tmpl;
       if (match != null) {
+        final fullMatch = match.group(0);
+        if (fullMatch != null) {
+          requestUrl = requestUrl.replaceAll('{0}', Uri.encodeComponent(fullMatch));
+        }
         for (int i = 1; i <= match.groupCount; i++) {
           final val = match.group(i);
           if (val != null) {
@@ -230,30 +265,35 @@ class YamlScraper implements Scraper {
       }
       requestUrl = requestUrl.replaceAll('{input}', Uri.encodeComponent(targetStr));
 
-      try {
-        ctx.log('YamlScraper($_id): GET $requestUrl');
-        final resp = await client.get(
-          Uri.parse(requestUrl),
-          headers: _headers.isNotEmpty
-              ? _headers
-              : {
-                  'User-Agent':
-                      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                },
-        ).timeout(Duration(seconds: _timeoutSeconds));
+      // Guard: if any placeholder like {1}, {2} remains unreplaced, abort request
+      if (RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(requestUrl)) {
+        ctx.log('YamlScraper($_id): 匹配未命中或占位符未替换完毕 ($requestUrl)，跳过网络请求');
+      } else {
+        try {
+          ctx.log('YamlScraper($_id): GET $requestUrl');
+          final resp = await client.get(
+            Uri.parse(requestUrl),
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Cookie': 'existmag=all; age=verified; over18=1',
+              ..._headers,
+            },
+          ).timeout(Duration(seconds: _timeoutSeconds));
 
-        if (resp.statusCode == 200) {
-          responseBody = resp.body;
-          try {
-            jsonRoot = jsonDecode(responseBody);
-          } catch (_) {
-            // Not JSON, keep as raw text / HTML
+          if (resp.statusCode == 200) {
+            responseBody = resp.body;
+            try {
+              jsonRoot = jsonDecode(responseBody);
+            } catch (_) {
+              // Not JSON, keep as raw text / HTML
+            }
+          } else {
+            ctx.log('YamlScraper($_id): HTTP ${resp.statusCode}');
           }
-        } else {
-          ctx.log('YamlScraper($_id): HTTP ${resp.statusCode}');
+        } catch (e) {
+          ctx.log('YamlScraper($_id) request failed: $e');
         }
-      } catch (e) {
-        ctx.log('YamlScraper($_id) request failed: $e');
       }
     }
 
@@ -316,10 +356,19 @@ class YamlScraper implements Scraper {
           }
         }
       } else {
-        // Static tag path e.g. "视频/Bilibili" or "视频"
-        final parts = tagDef.split('/').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-        if (parts.isNotEmpty) {
-          extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.9));
+        // Static or parameterized tag path e.g. "JAV / 女优 / {actress}"
+        String resolvedTag = tagDef;
+        for (final field in extractedFields) {
+          if (field.valueText != null) {
+            resolvedTag = resolvedTag.replaceAll('{${field.key}}', field.valueText!);
+          }
+        }
+        // If placeholder still unresolved (e.g. {actress} without actress found), ignore
+        if (!RegExp(r'\{[a-zA-Z0-9_]+\}').hasMatch(resolvedTag)) {
+          final parts = resolvedTag.split('/').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+          if (parts.isNotEmpty) {
+            extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.9));
+          }
         }
       }
     }

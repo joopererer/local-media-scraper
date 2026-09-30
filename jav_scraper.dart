@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'scraper.dart';
@@ -19,7 +20,10 @@ class JavScraper implements Scraper {
   String get description => '识别番号编码(如 SSIS-001, IPX-123)、片商厂牌、女优与发行信息';
 
   @override
-  List<String> get targetSupertags => const ['番号', 'JAV', 'AV', 'Adult'];
+  int get priority => 80;
+
+  @override
+  List<String> get targetSupertags => const ['JAV', 'AV', 'Adult'];
 
   @override
   RegExp? get patternRegex => RegExp(
@@ -28,7 +32,7 @@ class JavScraper implements Scraper {
       );
 
   @override
-  List<String>? get supertagToBackfill => const ['番号', 'JAV'];
+  List<String>? get supertagToBackfill => const ['JAV'];
 
   /// Known Japanese adult video studios / labels mapped from prefix.
   static const Map<String, String> _knownStudios = {
@@ -106,7 +110,7 @@ class JavScraper implements Scraper {
 
     final fields = <ProposedField>[
       ProposedField(
-        key: 'jav_code',
+        key: 'code',
         valueText: code,
         source: 'scraper:jav',
         confidence: 1.0,
@@ -121,43 +125,111 @@ class JavScraper implements Scraper {
       ),
     ];
 
+    // Extract year from filename (e.g. "SSIS-001 2023" or "[2023]")
+    final yearMatch = RegExp(r'(?:^|[\s\[\(])(?:20[0-2]\d|19[89]\d)(?:$|[\s\]\)])').firstMatch(fn);
+    if (yearMatch != null) {
+      final year = RegExp(r'\d{4}').firstMatch(yearMatch.group(0)!)!.group(0)!;
+      fields.add(ProposedField(
+        key: 'year',
+        valueText: year,
+        valueNum: double.tryParse(year),
+        source: 'scraper:jav',
+        confidence: 0.85,
+      ));
+    }
+
     final tags = <ProposedTag>[
-      const ProposedTag(tagPath: ['番号'], confidence: 1.0),
-      const ProposedTag(tagPath: ['番号', 'JAV'], confidence: 0.95),
-      ProposedTag(tagPath: ['片商', studio], confidence: 0.9),
+      const ProposedTag(tagPath: ['JAV'], confidence: 1.0),
+      ProposedTag(tagPath: ['JAV', '片商', studio], confidence: 0.9),
     ];
 
-    // If an online URL is provided or web scraping is enabled
-    if (url.contains('javbus.com') || url.contains('javdb.com')) {
-      try {
-        final resp = await client.get(
-          Uri.parse(url),
-          headers: {
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          },
-        ).timeout(const Duration(seconds: 10));
+    // Online fetch target URL: if explicit URL was given use it; otherwise probe JavBus, then JavDB fallback
+    final customBase = ctx.getConfig('javbus_base_url')?.trim();
+    final javbusBase = (customBase != null && customBase.isNotEmpty)
+        ? customBase.replaceAll(RegExp(r'/+$'), '')
+        : 'https://www.javbus.com';
 
-        if (resp.statusCode == 200) {
-          final parsed = parseJavHtml(resp.body, code: code);
+    // 1. Try JavBus
+    String targetUrl = url.contains('javbus.com') ? url : '$javbusBase/$code';
+    try {
+      ctx.log('JavScraper: online probe JavBus $targetUrl');
+      final resp = await client.get(
+        Uri.parse(targetUrl),
+        headers: {
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Cookie': 'existmag=all; age=verified',
+        },
+      ).timeout(const Duration(seconds: 8));
+
+      final bodyString = utf8.decode(resp.bodyBytes, allowMalformed: true);
+      if (resp.statusCode == 200 && !bodyString.contains('Age Verification JavBus')) {
+        final parsed = parseJavHtml(bodyString, code: code);
+        final actressNames = parsed.fields
+            .where((f) => f.key == 'actress')
+            .map((f) => f.valueText)
+            .whereType<String>()
+            .join(' ');
+        final composedTitle = actressNames.isNotEmpty
+            ? '$code [$actressNames]'
+            : (parsed.proposedTitle ?? code);
+
+        return ScrapeResult(
+          proposedTitle: composedTitle,
+          previewImageUrl: parsed.previewImageUrl,
+          fields: [...fields, ...parsed.fields],
+          tags: [...tags, ...parsed.tags],
+        );
+      } else {
+        ctx.log('JavScraper: JavBus returned ${resp.statusCode} or Age Verification redirect');
+      }
+    } catch (e) {
+      ctx.log('JavScraper: JavBus probe failed ($e)');
+    }
+
+    // 2. Cascade fallback to JavDB
+    try {
+      final javdbSearchUrl = 'https://javdb.com/search?q=${Uri.encodeComponent(code)}&f=all';
+      ctx.log('JavScraper: cascade fallback to JavDB $javdbSearchUrl');
+      final dbResp = await client.get(
+        Uri.parse(javdbSearchUrl),
+        headers: {
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Cookie': 'over18=1',
+        },
+      ).timeout(const Duration(seconds: 8));
+
+      if (dbResp.statusCode == 200) {
+        final dbBodyString = utf8.decode(dbResp.bodyBytes, allowMalformed: true);
+        final parsed = parseJavDbSearchHtml(dbBodyString, code: code);
+        if (parsed != null) {
+          ctx.log('JavScraper: successfully parsed metadata from JavDB');
+          final actressNames = parsed.fields
+              .where((f) => f.key == 'actress')
+              .map((f) => f.valueText)
+              .whereType<String>()
+              .join(' ');
+          final composedTitle = actressNames.isNotEmpty
+              ? '$code [$actressNames]'
+              : (parsed.proposedTitle ?? code);
+
           return ScrapeResult(
-            proposedTitle: parsed.proposedTitle ?? '$code [${parsed.fields.where((f) => f.key == 'actress').map((f) => f.valueText).join(' ')}]',
+            proposedTitle: composedTitle,
             previewImageUrl: parsed.previewImageUrl,
             fields: [...fields, ...parsed.fields],
             tags: [...tags, ...parsed.tags],
           );
         }
-      } catch (e) {
-        ctx.log('Jav online scrape error: $e');
       }
+    } catch (e) {
+      ctx.log('JavScraper: JavDB probe failed ($e)');
     }
 
-    // Try to extract potential actress name from filename if enclosed in brackets
-    // e.g. "SSIS-001 [三上悠亜].mp4" or "SSIS-001 三上悠亚"
+    // 3. Fallback to local filename actress pattern
     final actressMatch = RegExp(r'[\[\(\s]([^\x00-\x7F]{2,8})[\]\)\s\.]').firstMatch(fn);
     if (actressMatch != null) {
       final potentialActress = actressMatch.group(1)!.trim();
-      // Filter out non-names like 1080p, 高清, 中文字幕
       if (!['高清', '中文字幕', '字幕', '无码', '破解'].contains(potentialActress)) {
         fields.add(ProposedField(
           key: 'actress',
@@ -168,7 +240,7 @@ class JavScraper implements Scraper {
           confidence: 0.8,
         ));
         tags.add(ProposedTag(
-          tagPath: ['女优', potentialActress],
+          tagPath: ['JAV', '女优', potentialActress],
           confidence: 0.8,
         ));
       }
@@ -190,13 +262,32 @@ class JavScraper implements Scraper {
     }
 
     String? coverUrl;
-    final coverMatch = RegExp(r'<a class="bigImage" href="([^"]+)"').firstMatch(html);
+    final coverMatch = RegExp(r'<a class="bigImage" href="([^"]+)"').firstMatch(html) ??
+        RegExp(r'<meta property="og:image" content="([^"]+)"', caseSensitive: false).firstMatch(html) ??
+        RegExp(r'<img[^>]*class="[^"]*cover[^"]*"[^>]*src="([^"]+)"').firstMatch(html) ??
+        RegExp(r'<img[^>]*src="([^"]*cover[^"]*)"').firstMatch(html);
     if (coverMatch != null) {
       coverUrl = coverMatch.group(1);
+      if (coverUrl != null) {
+        if (coverUrl.startsWith('//')) {
+          coverUrl = 'https:$coverUrl';
+        } else if (coverUrl.startsWith('/')) {
+          coverUrl = 'https://www.javbus.com$coverUrl';
+        }
+      }
     }
 
     final fields = <ProposedField>[];
     final tags = <ProposedTag>[];
+
+    if (title != null && title.isNotEmpty) {
+      fields.add(ProposedField(
+        key: 'title',
+        valueText: title,
+        source: 'scraper:jav',
+        confidence: 0.95,
+      ));
+    }
 
     // Actresses
     final actressMatches = RegExp(r'<span class="genre"><a href="[^"]*star[^"]*">([^<]+)<\/a><\/span>').allMatches(html);
@@ -211,20 +302,25 @@ class JavScraper implements Scraper {
         confidence: 0.95,
       ));
       tags.add(ProposedTag(
-        tagPath: ['女优', actress],
+        tagPath: ['JAV', '女优', actress],
         confidence: 0.95,
       ));
     }
 
-    // Release date
+    // Release year (discard full release_date, only keep year)
     final dateMatch = RegExp(r'<span class="header">发行时间:<\/span>\s*([0-9\-]{8,10})').firstMatch(html);
     if (dateMatch != null) {
-      fields.add(ProposedField(
-        key: 'release_date',
-        valueText: dateMatch.group(1)!.trim(),
-        source: 'scraper:jav',
-        confidence: 0.95,
-      ));
+      final releaseDate = dateMatch.group(1)!.trim();
+      final yearStr = releaseDate.split('-').first;
+      if (yearStr.length == 4) {
+        fields.add(ProposedField(
+          key: 'year',
+          valueText: yearStr,
+          valueNum: double.tryParse(yearStr),
+          source: 'scraper:jav',
+          confidence: 0.95,
+        ));
+      }
     }
 
     return ScrapeResult(
@@ -233,6 +329,81 @@ class JavScraper implements Scraper {
       fields: fields,
       tags: tags,
     );
+  }
+
+  /// Parses JavDB search results HTML and extracts matching item
+  ScrapeResult? parseJavDbSearchHtml(String html, {required String code}) {
+    final cleanCode = code.toUpperCase();
+
+    // Check if whole HTML contains code
+    if (!html.toUpperCase().contains(cleanCode)) return null;
+
+    // Extract title (containing code)
+    final titleMatch = RegExp(r'class="video-title"[^>]*>(.*?)<\/div>', dotAll: true).firstMatch(html) ??
+        RegExp(r'title="([^"]*' + RegExp.escape(code) + r'[^"]*)"', caseSensitive: false).firstMatch(html) ??
+        RegExp(r'title="([^"]+)"').firstMatch(html);
+
+    String title = titleMatch != null
+        ? titleMatch.group(1)!.replaceAll(RegExp(r'<[^>]*>'), '').trim()
+        : '';
+
+    // Extract cover image
+    final imgMatch = RegExp(r'<img[^>]*src="([^"]*jdbstatic[^"]*covers[^"]*)"').firstMatch(html) ??
+        RegExp(r'<img[^>]*src="([^"]+)"').firstMatch(html);
+    final cover = imgMatch?.group(1);
+
+      final fields = <ProposedField>[];
+      final tags = <ProposedTag>[];
+
+      if (title.isNotEmpty) {
+        fields.add(ProposedField(
+          key: 'title',
+          valueText: title,
+          source: 'scraper:jav:javdb',
+          confidence: 0.9,
+        ));
+      }
+
+      // Extract actress: last token from title
+      final parts = title.split(RegExp(r'\s+'));
+      if (parts.length >= 2) {
+        final lastToken = parts.last.trim();
+        if (RegExp(r'^[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]{2,8}$').hasMatch(lastToken)) {
+          fields.add(ProposedField(
+            key: 'actress',
+            valueText: lastToken,
+            entityName: lastToken,
+            entityType: 'actress',
+            source: 'scraper:jav:javdb',
+            confidence: 0.9,
+          ));
+          tags.add(ProposedTag(
+            tagPath: ['JAV', '女优', lastToken],
+            confidence: 0.9,
+          ));
+        }
+      }
+
+      // Extract year if present in html
+      final dateMatch = RegExp(r'(\d{4}-\d{2}-\d{2})').firstMatch(html);
+      if (dateMatch != null) {
+        final releaseDate = dateMatch.group(1)!;
+        final yearStr = releaseDate.split('-').first;
+        fields.add(ProposedField(
+          key: 'year',
+          valueText: yearStr,
+          valueNum: double.tryParse(yearStr),
+          source: 'scraper:jav:javdb',
+          confidence: 0.9,
+        ));
+      }
+
+      return ScrapeResult(
+        proposedTitle: title.isNotEmpty ? '$code $title' : code,
+        previewImageUrl: cover,
+        fields: fields,
+        tags: tags,
+      );
   }
 
   /// Extracts and formats designation code to standard uppercase with hyphen: e.g. `SSIS-001`.

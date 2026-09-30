@@ -13,6 +13,9 @@ class FileNameScraper implements Scraper {
   String get description => '从文件名中自动识别番号、年份、集数、括号标签及制作社';
 
   @override
+  int get priority => 20;
+
+  @override
   List<String> get targetSupertags => const [];
 
   @override

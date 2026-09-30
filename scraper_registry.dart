@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -8,6 +10,8 @@ import '../../data/db/app_database.dart';
 import '../../data/repositories/entity_repository.dart';
 import '../../data/repositories/field_value_repository.dart';
 import '../../data/repositories/resource_repository.dart';
+import '../../features/browser/widgets/thumbnail_widget.dart';
+import '../services/thumbnail_service.dart';
 import '../../data/repositories/tag_repository.dart';
 import 'bangumi_scraper.dart';
 import 'douban_scraper.dart';
@@ -43,10 +47,12 @@ class ScraperRegistry {
   final FieldValueRepository _fieldValueRepo;
   final EntityRepository _entityRepo;
   final TagRepository _tagRepo;
+  final ThumbnailService? _thumbnailService;
   final YamlScraperLoader _yamlLoader;
 
   final List<Scraper> _scrapers = [];
   final Map<String, bool> _enabledStates = {};
+  final Map<String, int> _customPriorities = {};
   final Map<String, dynamic> _configs = {};
 
   ScraperRegistry({
@@ -55,6 +61,7 @@ class ScraperRegistry {
     required FieldValueRepository fieldValueRepo,
     required EntityRepository entityRepo,
     required TagRepository tagRepo,
+    ThumbnailService? thumbnailService,
     YamlScraperLoader? yamlLoader,
     List<Scraper>? initialScrapers,
   })  : _db = db,
@@ -62,6 +69,7 @@ class ScraperRegistry {
         _fieldValueRepo = fieldValueRepo,
         _entityRepo = entityRepo,
         _tagRepo = tagRepo,
+        _thumbnailService = thumbnailService,
         _yamlLoader = yamlLoader ?? YamlScraperLoader() {
     if (initialScrapers != null) {
       _scrapers.addAll(initialScrapers);
@@ -77,7 +85,13 @@ class ScraperRegistry {
     }
   }
 
-  List<Scraper> get scrapers => List.unmodifiable(_scrapers);
+  /// Returns scrapers sorted by effective priority descending.
+  List<Scraper> get scrapers {
+    final list = List<Scraper>.from(_scrapers);
+    list.sort((a, b) => getScraperPriority(b.id).compareTo(getScraperPriority(a.id)));
+    return List.unmodifiable(list);
+  }
+
   YamlScraperLoader get yamlLoader => _yamlLoader;
 
   /// Registers a custom scraper.
@@ -95,6 +109,24 @@ class ScraperRegistry {
   /// Sets enabled state for a scraper and persists to database.
   Future<void> setScraperEnabled(String id, bool enabled) async {
     _enabledStates[id] = enabled;
+    await _persistSettings();
+  }
+
+  /// Returns effective priority for a scraper (custom overridden or default).
+  int getScraperPriority(String id) {
+    if (_customPriorities.containsKey(id)) {
+      return _customPriorities[id]!;
+    }
+    final scraper = _scrapers.firstWhere(
+      (s) => s.id == id,
+      orElse: () => _scrapers.first,
+    );
+    return scraper.priority;
+  }
+
+  /// Sets custom priority for a scraper and persists.
+  Future<void> setScraperPriority(String id, int priority) async {
+    _customPriorities[id] = priority;
     await _persistSettings();
   }
 
@@ -138,7 +170,25 @@ class ScraperRegistry {
       } catch (_) {}
     }
 
-    // 2. Scraper configs (API keys, proxies)
+    // 2. Scraper priorities
+    final prioritiesSetting = await (_db.select(_db.settings)
+          ..where((tbl) => tbl.key.equals('scraper_priorities')))
+        .getSingleOrNull();
+
+    if (prioritiesSetting != null) {
+      try {
+        final decoded = jsonDecode(prioritiesSetting.valueJson);
+        if (decoded is Map<String, dynamic>) {
+          for (final entry in decoded.entries) {
+            if (entry.value is num) {
+              _customPriorities[entry.key] = (entry.value as num).toInt();
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3. Scraper configs (API keys, proxies)
     final configSetting = await (_db.select(_db.settings)
           ..where((tbl) => tbl.key.equals('scraper_configs')))
         .getSingleOrNull();
@@ -151,6 +201,48 @@ class ScraperRegistry {
         }
       } catch (_) {}
     }
+
+    // 4. Ensure default Supertags (e.g. JAV) are seeded with schema fields
+    await _ensureDefaultSupertags();
+  }
+
+  /// Ensures that standard Supertags like JAV exist in the database with their schema fields.
+  Future<void> _ensureDefaultSupertags() async {
+    try {
+      final javTag = await _tagRepo.findOrCreateTag('JAV');
+      final existingFields = await _tagRepo.getFieldsForTag(javTag.id);
+
+      final defaultFields = [
+        ('code', '番号', 'string', null, false, 0),
+        ('title', '片名', 'string', null, false, 1),
+        ('studio', '片商', 'entity', 'studio', false, 2),
+        ('actress', '女优', 'entity', 'actress', true, 3),
+        ('year', '发行年份', 'number', null, false, 4),
+      ];
+
+      for (final (key, label, valueType, entityType, multi, sortOrder) in defaultFields) {
+        final existingField = existingFields.where((f) => f.key == key).firstOrNull;
+        if (existingField == null) {
+          await _tagRepo.createTagField(
+            tagId: javTag.id,
+            key: key,
+            label: label,
+            valueType: valueType,
+            entityType: entityType,
+            multi: multi,
+            sortOrder: sortOrder,
+          );
+        } else if (existingField.label != label) {
+          await _tagRepo.updateTagField(
+            id: existingField.id,
+            label: label,
+          );
+        }
+      }
+    } catch (e) {
+      // Non-blocking initialization error
+      debugPrint('ScraperRegistry: error ensuring default supertags: $e');
+    }
   }
 
   Future<void> _persistSettings() async {
@@ -159,6 +251,14 @@ class ScraperRegistry {
       SettingsCompanion.insert(
         key: 'scraper_settings',
         valueJson: jsonStr,
+      ),
+    );
+
+    final prioritiesJsonStr = jsonEncode(_customPriorities);
+    await _db.into(_db.settings).insertOnConflictUpdate(
+      SettingsCompanion.insert(
+        key: 'scraper_priorities',
+        valueJson: prioritiesJsonStr,
       ),
     );
   }
@@ -194,7 +294,8 @@ class ScraperRegistry {
 
     // --- Tier 1: Feature Rule Pre-Dispatch & Supertag Backfilling ---
     final targetStr = '${input.fileName ?? ''} ${input.sourceUrl ?? ''} ${input.resource.title ?? ''}'.trim();
-    for (final scraper in _scrapers) {
+    final orderedScrapers = scrapers; // already sorted by priority descending
+    for (final scraper in orderedScrapers) {
       if (!isScraperEnabled(scraper.id)) continue;
       if (scraper.patternRegex != null && scraper.patternRegex!.hasMatch(targetStr)) {
         final stBackfill = scraper.supertagToBackfill;
@@ -236,7 +337,7 @@ class ScraperRegistry {
     );
 
     // --- Tier 2: Supertag Targeted & Specific Scrapers Dispatch ---
-    for (final scraper in _scrapers) {
+    for (final scraper in orderedScrapers) {
       if (!isScraperEnabled(scraper.id)) continue;
       if (!scraper.canHandle(currentInput)) continue;
 
@@ -335,6 +436,50 @@ class ScraperRegistry {
       }
     }
 
+    // Download remote cover image and save as thumbnail
+    if (bestPreviewImage != null && bestPreviewImage.startsWith('http')) {
+      try {
+        final client = http.Client();
+        try {
+          final imgUri = Uri.parse(bestPreviewImage);
+          final response = await client.get(
+            imgUri,
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Referer': '${imgUri.scheme}://${imgUri.host}/',
+            },
+          ).timeout(const Duration(seconds: 15));
+
+          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+            final thumbService = _thumbnailService;
+            if (thumbService != null) {
+              await thumbService.saveRemoteCoverAsThumbnail(
+                input.resource.id,
+                response.bodyBytes,
+              );
+              ThumbnailWidget.invalidateCache(input.resource.id);
+              debugPrint('ScraperRegistry: saved remote cover as thumbnail for ${input.resource.id}');
+
+              // Bump resource updatedAt so listeners re-render with new thumbnail
+              await _resourceRepo.updateResource(
+                ResourcesCompanion(
+                  id: Value(input.resource.id),
+                  updatedAt: Value(DateTime.now().toUtc().millisecondsSinceEpoch),
+                ),
+              );
+            }
+          } else {
+            debugPrint('ScraperRegistry: cover download returned status ${response.statusCode}');
+          }
+        } finally {
+          client.close();
+        }
+      } catch (e) {
+        debugPrint('ScraperRegistry: failed to download cover image: $e');
+      }
+    }
+
     return ScrapePipelineResult(
       updatedTitle: bestTitle,
       previewImageUrl: bestPreviewImage,
@@ -395,6 +540,7 @@ final scraperRegistryProvider = Provider<ScraperRegistry>((ref) {
   final fieldValueRepo = ref.watch(fieldValueRepositoryProvider);
   final entityRepo = ref.watch(entityRepositoryProvider);
   final tagRepo = ref.watch(tagRepositoryProvider);
+  final thumbService = ref.watch(thumbnailServiceProvider);
 
   final registry = ScraperRegistry(
     db: db,
@@ -402,6 +548,7 @@ final scraperRegistryProvider = Provider<ScraperRegistry>((ref) {
     fieldValueRepo: fieldValueRepo,
     entityRepo: entityRepo,
     tagRepo: tagRepo,
+    thumbnailService: thumbService,
   );
 
   // Asynchronously load settings and yaml plugins

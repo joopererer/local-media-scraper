@@ -19,6 +19,9 @@ class BangumiScraper implements Scraper {
   String get description => '二次元动画、漫画与轻小说元数据刮削 (提取日文原名、中文名、制作公司与声优)';
 
   @override
+  int get priority => 85;
+
+  @override
   List<String> get targetSupertags => const ['番剧', 'Anime', '动画', '漫画', 'Manga', 'ACG'];
 
   @override

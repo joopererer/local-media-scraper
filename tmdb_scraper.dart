@@ -19,6 +19,9 @@ class TmdbScraper implements Scraper {
   String get description => '国际电影与剧集元数据刮削 (支持演职员、导演、类型与海报封面)';
 
   @override
+  int get priority => 90;
+
+  @override
   List<String> get targetSupertags => const ['电影', 'Movie', '剧集', 'Series', '电视剧'];
 
   @override
@@ -146,12 +149,16 @@ class TmdbScraper implements Scraper {
     }
 
     if (releaseDate != null && releaseDate.isNotEmpty) {
-      fields.add(ProposedField(
-        key: 'release_date',
-        valueText: releaseDate,
-        source: 'scraper:tmdb',
-        confidence: 0.95,
-      ));
+      final yearStr = releaseDate.split('-').first;
+      if (yearStr.length == 4) {
+        fields.add(ProposedField(
+          key: 'year',
+          valueText: yearStr,
+          valueNum: double.tryParse(yearStr),
+          source: 'scraper:tmdb',
+          confidence: 0.95,
+        ));
+      }
     }
 
     if (voteAverage != null && voteAverage > 0) {

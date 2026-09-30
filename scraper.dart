@@ -98,6 +98,10 @@ abstract class Scraper {
   String get displayName;
   String get description;
 
+  /// Execution priority (higher executes earlier).
+  /// Built-in specialized scrapers default to 80-90, universal fallbacks to 10-20.
+  int get priority => 50;
+
   /// Target supertags that this scraper specializes in (e.g. `['电影', 'Movie']`, `['番剧', 'Anime']`).
   /// An empty list means universal / not constrained to specific supertags.
   List<String> get targetSupertags => const [];
