@@ -140,7 +140,11 @@ class JavScraper implements Scraper {
 
     final tags = <ProposedTag>[
       const ProposedTag(tagPath: ['JAV'], confidence: 1.0),
-      ProposedTag(tagPath: ['JAV', '片商', studio], confidence: 0.9),
+      ProposedTag(
+        tagPath: ['JAV', '片商', studio],
+        confidence: 0.9,
+        rawTemplate: 'JAV / 片商 / {studio}',
+      ),
     ];
 
     // Online fetch target URL: if explicit URL was given use it; otherwise probe JavBus, then JavDB fallback
@@ -242,6 +246,7 @@ class JavScraper implements Scraper {
         tags.add(ProposedTag(
           tagPath: ['JAV', '女优', potentialActress],
           confidence: 0.8,
+          rawTemplate: 'JAV / 女优 / {actress}',
         ));
       }
     }
@@ -304,6 +309,7 @@ class JavScraper implements Scraper {
       tags.add(ProposedTag(
         tagPath: ['JAV', '女优', actress],
         confidence: 0.95,
+        rawTemplate: 'JAV / 女优 / {actress}',
       ));
     }
 
@@ -380,6 +386,7 @@ class JavScraper implements Scraper {
           tags.add(ProposedTag(
             tagPath: ['JAV', '女优', lastToken],
             confidence: 0.9,
+            rawTemplate: 'JAV / 女优 / {actress}',
           ));
         }
       }
