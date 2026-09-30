@@ -43,6 +43,26 @@ class ProposedField {
     this.confidence = 0.8,
     required this.source,
   });
+
+  ProposedField copyWith({
+    String? key,
+    String? valueText,
+    double? valueNum,
+    String? entityName,
+    String? entityType,
+    double? confidence,
+    String? source,
+  }) {
+    return ProposedField(
+      key: key ?? this.key,
+      valueText: valueText ?? this.valueText,
+      valueNum: valueNum ?? this.valueNum,
+      entityName: entityName ?? this.entityName,
+      entityType: entityType ?? this.entityType,
+      confidence: confidence ?? this.confidence,
+      source: source ?? this.source,
+    );
+  }
 }
 
 /// A tag proposed by a scraper.
@@ -57,22 +77,45 @@ class ProposedTag {
   });
 }
 
+/// A candidate item discovered during scraping (e.g. search results).
+class ScrapeCandidate {
+  final String title;
+  final String? subtitle;
+  final String? url;
+  final String? coverUrl;
+  final Map<String, dynamic> extra;
+
+  const ScrapeCandidate({
+    required this.title,
+    this.subtitle,
+    this.url,
+    this.coverUrl,
+    this.extra = const {},
+  });
+}
+
 /// Aggregated result returned by a [Scraper].
 class ScrapeResult {
   final List<ProposedField> fields;
   final List<ProposedTag> tags;
   final String? proposedTitle;
   final String? previewImageUrl;
+  final List<ScrapeCandidate> candidates;
 
   const ScrapeResult({
     this.fields = const [],
     this.tags = const [],
     this.proposedTitle,
     this.previewImageUrl,
+    this.candidates = const [],
   });
 
   bool get isEmpty =>
-      fields.isEmpty && tags.isEmpty && proposedTitle == null && previewImageUrl == null;
+      fields.isEmpty &&
+      tags.isEmpty &&
+      proposedTitle == null &&
+      previewImageUrl == null &&
+      candidates.isEmpty;
 }
 
 /// Execution context for scrapers (e.g. logging, API keys, proxy, http client).

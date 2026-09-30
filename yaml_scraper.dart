@@ -4,6 +4,69 @@ import 'package:yaml/yaml.dart';
 
 import 'scraper.dart';
 
+/// Configuration schema field definition for a YAML scraper.
+class YamlConfigSchema {
+  final String key;
+  final String label;
+  final String type; // 'string', 'password', 'url', 'boolean'
+  final bool required;
+  final String? defaultValue;
+  final String? description;
+
+  const YamlConfigSchema({
+    required this.key,
+    required this.label,
+    this.type = 'string',
+    this.required = false,
+    this.defaultValue,
+    this.description,
+  });
+
+  factory YamlConfigSchema.fromYaml(dynamic map) {
+    if (map is! Map) {
+      throw ArgumentError('Config schema field must be a map');
+    }
+    return YamlConfigSchema(
+      key: map['key']?.toString() ?? '',
+      label: map['label']?.toString() ?? map['key']?.toString() ?? '',
+      type: map['type']?.toString().toLowerCase() ?? 'string',
+      required: map['required'] == true,
+      defaultValue: map['default']?.toString() ?? map['default_value']?.toString(),
+      description: map['description']?.toString(),
+    );
+  }
+}
+
+/// Candidate parsing rule for multi-item/search scraping.
+class YamlCandidateRule {
+  final String source;
+  final String titleSource;
+  final String? subtitleSource;
+  final String? urlSource;
+  final String? coverSource;
+
+  const YamlCandidateRule({
+    required this.source,
+    required this.titleSource,
+    this.subtitleSource,
+    this.urlSource,
+    this.coverSource,
+  });
+
+  factory YamlCandidateRule.fromYaml(dynamic map) {
+    if (map is! Map) {
+      throw ArgumentError('Items candidate rule must be a map');
+    }
+    return YamlCandidateRule(
+      source: map['source']?.toString() ?? '',
+      titleSource: map['title']?.toString() ?? 'title',
+      subtitleSource: map['subtitle']?.toString(),
+      urlSource: map['url']?.toString(),
+      coverSource: map['cover']?.toString() ?? map['cover_url']?.toString(),
+    );
+  }
+}
+
 /// A field rule defined in YAML scraper specification.
 class YamlFieldRule {
   final String key;
@@ -71,6 +134,10 @@ class YamlScraper implements Scraper {
   final int _priority;
   final List<YamlFieldRule> _fields;
   final List<String> _tags;
+  final List<YamlConfigSchema> _configSchema;
+  final YamlCandidateRule? _candidateRule;
+  final String? _detailUrlTemplate;
+  final bool _autoDrillDownSingle;
   final http.Client? _client;
 
   YamlScraper({
@@ -87,6 +154,10 @@ class YamlScraper implements Scraper {
     int timeoutSeconds = 10,
     List<YamlFieldRule> fields = const [],
     List<String> tags = const [],
+    List<YamlConfigSchema> configSchema = const [],
+    YamlCandidateRule? candidateRule,
+    String? detailUrlTemplate,
+    bool autoDrillDownSingle = true,
     http.Client? client,
   })  : _id = id,
         _displayName = displayName,
@@ -101,6 +172,10 @@ class YamlScraper implements Scraper {
         _timeoutSeconds = timeoutSeconds,
         _fields = fields,
         _tags = tags,
+        _configSchema = configSchema,
+        _candidateRule = candidateRule,
+        _detailUrlTemplate = detailUrlTemplate,
+        _autoDrillDownSingle = autoDrillDownSingle,
         _client = client;
 
   factory YamlScraper.fromYamlString(String yamlContent, {http.Client? client}) {
@@ -167,6 +242,31 @@ class YamlScraper implements Scraper {
 
     final priority = (doc['priority'] is num) ? (doc['priority'] as num).toInt() : 60;
 
+    final configSchemaList = <YamlConfigSchema>[];
+    final configSchemaRaw = doc['config_schema'] ?? doc['config'];
+    if (configSchemaRaw is Iterable) {
+      for (final cs in configSchemaRaw) {
+        if (cs is Map) {
+          configSchemaList.add(YamlConfigSchema.fromYaml(cs));
+        }
+      }
+    }
+
+    YamlCandidateRule? candidateRule;
+    if (doc['items'] is Map) {
+      candidateRule = YamlCandidateRule.fromYaml(doc['items'] as Map);
+    }
+
+    String? detailUrlTemplate;
+    bool autoDrillDownSingle = true;
+    if (doc['detail_request'] is Map) {
+      final dr = doc['detail_request'] as Map;
+      detailUrlTemplate = dr['url_template']?.toString();
+      if (dr['auto_drill_down_single'] is bool) {
+        autoDrillDownSingle = dr['auto_drill_down_single'] as bool;
+      }
+    }
+
     final tagRules = <String>[];
     final tagsRaw = doc['tags'];
     if (tagsRaw is Iterable) {
@@ -189,6 +289,10 @@ class YamlScraper implements Scraper {
       timeoutSeconds: timeout,
       fields: fieldRules,
       tags: tagRules,
+      configSchema: configSchemaList,
+      candidateRule: candidateRule,
+      detailUrlTemplate: detailUrlTemplate,
+      autoDrillDownSingle: autoDrillDownSingle,
       client: client,
     );
   }
@@ -215,6 +319,118 @@ class YamlScraper implements Scraper {
   List<String>? get supertagToBackfill => _supertagToBackfill;
 
   List<String> get mediaTypes => List.unmodifiable(_mediaTypes);
+
+  List<YamlConfigSchema> get configSchema => List.unmodifiable(_configSchema);
+
+  List<YamlFieldRule> get fieldRules => List.unmodifiable(_fields);
+
+  YamlCandidateRule? get candidateRule => _candidateRule;
+
+  String? get detailUrlTemplate => _detailUrlTemplate;
+
+  bool get autoDrillDownSingle => _autoDrillDownSingle;
+
+  /// Evaluates micro-templates supporting fallback chains (`{1 ?? 2 ?? input}`),
+  /// conditionals (`{if {1}}...{else}...{/if}`), and variable replacements (`{config:key}`, `{1}`, `{input}`).
+  static String renderTemplate(
+    String template, {
+    Match? match,
+    String? targetStr,
+    String? Function(String key)? getConfig,
+    Map<String, String>? extraVariables,
+  }) {
+    String res = template;
+
+    // Helper to evaluate a variable identifier (e.g. "1", "code", "config:key", "input")
+    String? evalVar(String rawVar) {
+      final v = rawVar.trim();
+      if (v.isEmpty) return null;
+      if (v.startsWith('config:')) {
+        final cfgKey = v.substring(7);
+        final val = getConfig?.call(cfgKey);
+        return (val != null && val.isNotEmpty) ? val : null;
+      }
+      if (v == 'input') {
+        return (targetStr != null && targetStr.isNotEmpty) ? targetStr : null;
+      }
+      if (v == '0' && match != null) {
+        final g = match.group(0);
+        return (g != null && g.isNotEmpty) ? g : null;
+      }
+      final idx = int.tryParse(v);
+      if (idx != null && match != null && idx <= match.groupCount) {
+        final g = match.group(idx);
+        return (g != null && g.isNotEmpty) ? g : null;
+      }
+      if (extraVariables != null && extraVariables.containsKey(v)) {
+        final val = extraVariables[v];
+        return (val != null && val.isNotEmpty) ? val : null;
+      }
+      return null;
+    }
+
+    // 1. Process Conditionals: {if {var}}...{else}...{/if} or {if var}...{else}...{/if}
+    final ifRegex = RegExp(
+      r'\{if\s+\{?([0-9a-zA-Z_:]+)\}?\}([\s\S]*?)(?:\{else\}([\s\S]*?))?\{/if\}',
+      caseSensitive: false,
+    );
+    res = res.replaceAllMapped(ifRegex, (m) {
+      final varName = m.group(1)!;
+      final ifBranch = m.group(2) ?? '';
+      final elseBranch = m.group(3) ?? '';
+      final val = evalVar(varName);
+      return (val != null && val.isNotEmpty) ? ifBranch : elseBranch;
+    });
+
+    // 2. Process Fallbacks: {var1 ?? var2 ?? var3}
+    final fallbackRegex = RegExp(r'\{([0-9a-zA-Z_:]+(?:\s*\?\?\s*[0-9a-zA-Z_:]+)+)\}');
+    res = res.replaceAllMapped(fallbackRegex, (m) {
+      final expr = m.group(1)!;
+      final tokens = expr.split('??').map((t) => t.trim());
+      for (final t in tokens) {
+        final val = evalVar(t);
+        if (val != null && val.isNotEmpty) {
+          return Uri.encodeComponent(val);
+        }
+      }
+      return '';
+    });
+
+    // 3. Process Standard Placeholders: {0}, {1}..{n}, {input}, {config:key}, {extra}
+    if (match != null) {
+      final fullMatch = match.group(0);
+      if (fullMatch != null) {
+        res = res.replaceAll('{0}', Uri.encodeComponent(fullMatch));
+      }
+      for (int i = 1; i <= match.groupCount; i++) {
+        final val = match.group(i) ?? '';
+        res = res.replaceAll('{$i}', Uri.encodeComponent(val));
+      }
+    }
+
+    if (targetStr != null) {
+      res = res.replaceAll('{input}', Uri.encodeComponent(targetStr));
+    }
+
+    if (extraVariables != null) {
+      extraVariables.forEach((k, v) {
+        res = res.replaceAll('{$k}', Uri.encodeComponent(v));
+      });
+    }
+
+    res = res.replaceAllMapped(RegExp(r'\{config:([a-zA-Z0-9_]+)\}'), (m) {
+      final cfgKey = m.group(1)!;
+      final cfgVal = getConfig?.call(cfgKey);
+      if (cfgVal == null || cfgVal.isEmpty) return '';
+      // If config value is a complete URL (e.g. base_url or proxy), don't URL-encode slashes/colons
+      if (cfgVal.startsWith('http://') || cfgVal.startsWith('https://')) {
+        return cfgVal;
+      }
+      return Uri.encodeComponent(cfgVal);
+    });
+
+    return res;
+  }
 
   @override
   bool canHandle(ScrapeInput input) {
@@ -262,64 +478,138 @@ class YamlScraper implements Scraper {
     String? responseBody;
     dynamic jsonRoot;
 
-    // 2. If url_template is provided, perform HTTP request
+    // Helper for making HTTP GET request
+    Future<({String? body, dynamic json})> fetchUrl(String reqUrl) async {
+      try {
+        ctx.log('YamlScraper($_id): GET $reqUrl');
+        final effectiveHeaders = <String, String>{
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Cookie': 'existmag=all; age=verified; over18=1',
+        };
+        _headers.forEach((k, v) {
+          effectiveHeaders[k] = renderTemplate(
+            v,
+            match: match,
+            targetStr: targetStr,
+            getConfig: ctx.getConfig,
+          );
+        });
+
+        final resp = await client
+            .get(
+              Uri.parse(reqUrl),
+              headers: effectiveHeaders,
+            )
+            .timeout(Duration(seconds: _timeoutSeconds));
+
+        if (resp.statusCode == 200) {
+          final b = utf8.decode(resp.bodyBytes, allowMalformed: true);
+          dynamic j;
+          try {
+            j = jsonDecode(b);
+          } catch (_) {}
+          return (body: b, json: j);
+        } else {
+          ctx.log('YamlScraper($_id): HTTP ${resp.statusCode}');
+        }
+      } catch (e) {
+        ctx.log('YamlScraper($_id) request failed: $e');
+      }
+      return (body: null, json: null);
+    }
+
+    // 2. Perform primary HTTP request using renderTemplate
     final tmpl = _urlTemplate;
     if (tmpl != null) {
-      String requestUrl = tmpl;
-      if (match != null) {
-        final fullMatch = match.group(0);
-        if (fullMatch != null) {
-          requestUrl = requestUrl.replaceAll('{0}', Uri.encodeComponent(fullMatch));
-        }
-        for (int i = 1; i <= match.groupCount; i++) {
-          final val = match.group(i) ?? '';
-          requestUrl = requestUrl.replaceAll('{$i}', Uri.encodeComponent(val));
-        }
-      }
-      requestUrl = requestUrl.replaceAll('{input}', Uri.encodeComponent(targetStr));
+      final requestUrl = renderTemplate(
+        tmpl,
+        match: match,
+        targetStr: targetStr,
+        getConfig: ctx.getConfig,
+      );
 
-      // Replace {config:key} placeholders from ScrapeContext
-      requestUrl = requestUrl.replaceAllMapped(RegExp(r'\{config:([a-zA-Z0-9_]+)\}'), (m) {
-        final cfgKey = m.group(1)!;
-        final cfgVal = ctx.getConfig(cfgKey);
-        return cfgVal != null && cfgVal.isNotEmpty ? Uri.encodeComponent(cfgVal) : '';
-      });
-
-      // Guard: if any placeholder like {1}, {2} remains unreplaced, abort request
+      // Guard: if any unreplaced placeholder remains, abort request
       if (RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(requestUrl)) {
         ctx.log('YamlScraper($_id): 匹配未命中或占位符未替换完毕 ($requestUrl)，跳过网络请求');
       } else {
-        try {
-          ctx.log('YamlScraper($_id): GET $requestUrl');
-          final effectiveHeaders = <String, String>{
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Cookie': 'existmag=all; age=verified; over18=1',
-          };
-          _headers.forEach((k, v) {
-            // Support {config:key} in headers
-            effectiveHeaders[k] = v.replaceAllMapped(RegExp(r'\{config:([a-zA-Z0-9_]+)\}'), (m) {
-              return ctx.getConfig(m.group(1)!) ?? '';
-            });
-          });
+        final res = await fetchUrl(requestUrl);
+        responseBody = res.body;
+        jsonRoot = res.json;
+      }
+    }
 
-          final resp = await client.get(
-            Uri.parse(requestUrl),
-            headers: effectiveHeaders,
-          ).timeout(Duration(seconds: _timeoutSeconds));
+    // 3. Extract Candidates if items rule is defined
+    final extractedCandidates = <ScrapeCandidate>[];
+    final candRule = _candidateRule;
+    if (candRule != null && (responseBody != null || jsonRoot != null)) {
+      final rawItems = _resolveSource(
+        candRule.source,
+        rawText: responseBody ?? '',
+        jsonData: jsonRoot,
+        match: match,
+      );
 
-          if (resp.statusCode == 200) {
-            responseBody = utf8.decode(resp.bodyBytes, allowMalformed: true);
-            try {
-              jsonRoot = jsonDecode(responseBody);
-            } catch (_) {
-              // Not JSON, keep as raw text / HTML
+      if (rawItems is List) {
+        for (final item in rawItems) {
+          if (item is Map) {
+            final t = _resolveSource(candRule.titleSource, rawText: '', jsonData: item)?.toString();
+            if (t != null && t.trim().isNotEmpty) {
+              final subRule = candRule.subtitleSource;
+              final sub = subRule != null
+                  ? _resolveSource(subRule, rawText: '', jsonData: item)?.toString()
+                  : null;
+              final uRule = candRule.urlSource;
+              final u = uRule != null
+                  ? _resolveSource(uRule, rawText: '', jsonData: item)?.toString()
+                  : null;
+              final cRule = candRule.coverSource;
+              final cov = cRule != null
+                  ? _resolveSource(cRule, rawText: '', jsonData: item)?.toString()
+                  : null;
+              extractedCandidates.add(ScrapeCandidate(
+                title: t.trim(),
+                subtitle: sub?.trim(),
+                url: u?.trim(),
+                coverUrl: cov?.trim(),
+                extra: Map<String, dynamic>.from(item),
+              ));
             }
-          } else {
-            ctx.log('YamlScraper($_id): HTTP ${resp.statusCode}');
           }
-        } catch (e) {
-          ctx.log('YamlScraper($_id) request failed: $e');
+        }
+      }
+
+      // Check for two-stage auto drill-down:
+      // If exactly 1 candidate returned and detail_request is configured with auto_drill_down_single == true
+      final detailUrlTmpl = _detailUrlTemplate;
+      if (extractedCandidates.length == 1 &&
+          _autoDrillDownSingle &&
+          detailUrlTmpl != null) {
+        final singleCand = extractedCandidates.first;
+        final extraVars = <String, String>{
+          'url': singleCand.url ?? '',
+          'title': singleCand.title,
+          if (singleCand.subtitle != null) 'subtitle': singleCand.subtitle!,
+        };
+        singleCand.extra.forEach((k, v) {
+          if (v != null) extraVars[k] = v.toString();
+        });
+
+        final detailUrl = renderTemplate(
+          detailUrlTmpl,
+          match: match,
+          targetStr: targetStr,
+          getConfig: ctx.getConfig,
+          extraVariables: extraVars,
+        );
+
+        if (!RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(detailUrl)) {
+          ctx.log('YamlScraper($_id): 命中唯一候选结果，自动执行二级深挖 -> $detailUrl');
+          final detailRes = await fetchUrl(detailUrl);
+          if (detailRes.body != null) {
+            responseBody = detailRes.body;
+            jsonRoot = detailRes.json;
+          }
         }
       }
     }
@@ -450,6 +740,7 @@ class YamlScraper implements Scraper {
       previewImageUrl: previewImageUrl,
       fields: extractedFields,
       tags: extractedTags,
+      candidates: extractedCandidates,
     );
   }
 

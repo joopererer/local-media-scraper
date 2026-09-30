@@ -54,6 +54,7 @@ class ScraperRegistry {
   final Map<String, bool> _enabledStates = {};
   final Map<String, int> _customPriorities = {};
   final Map<String, dynamic> _configs = {};
+  final Map<String, Map<String, double>> _customConfidences = {};
 
   ScraperRegistry({
     required AppDatabase db,
@@ -136,10 +137,68 @@ class ScraperRegistry {
   /// Retrieves a scraper configuration value (e.g. `tmdb_api_key`, `proxy_url`).
   String? getConfig(String key) => _configs[key]?.toString();
 
+  /// Returns an unmodifiable view of all stored configs.
+  Map<String, dynamic> get allConfigs => Map.unmodifiable(_configs);
+
   /// Sets and persists a scraper configuration value.
   Future<void> setConfig(String key, dynamic value) async {
     _configs[key] = value;
     await _persistConfigs();
+  }
+
+  /// Returns effective confidence for a specific field of a scraper.
+  double getEffectiveConfidence(String scraperId, String fieldKey, double defaultConfidence) {
+    return _customConfidences[scraperId]?[fieldKey] ?? defaultConfidence;
+  }
+
+  /// Sets custom confidence override for a specific field of a scraper.
+  Future<void> setFieldConfidence(String scraperId, String fieldKey, double confidence) async {
+    _customConfidences.putIfAbsent(scraperId, () => {})[fieldKey] = confidence;
+    await _persistConfidences();
+  }
+
+  /// Resets confidence overrides for a scraper back to its default.
+  Future<void> resetFieldConfidences(String scraperId) async {
+    _customConfidences.remove(scraperId);
+    await _persistConfidences();
+  }
+
+  /// Cleans up orphan configurations and confidences belonging to scrapers that are no longer installed.
+  Future<int> cleanOrphanConfigs() async {
+    int removedCount = 0;
+    final validScraperIds = _scrapers.map((s) => s.id).toSet();
+
+    // 1. Clean orphan confidences
+    final orphanConfScrapers = _customConfidences.keys.where((id) => !validScraperIds.contains(id)).toList();
+    for (final id in orphanConfScrapers) {
+      _customConfidences.remove(id);
+      removedCount++;
+    }
+    if (orphanConfScrapers.isNotEmpty) {
+      await _persistConfidences();
+    }
+
+    // 2. Collect all active config keys declared by active scrapers (via YamlScraper.configSchema)
+    final activeConfigKeys = <String>{'tmdb_api_key', 'proxy_url', 'javbus_base_url'};
+    for (final s in _scrapers) {
+      if (s is YamlScraper) {
+        for (final cs in s.configSchema) {
+          activeConfigKeys.add(cs.key);
+        }
+      }
+    }
+
+    // Clean orphan config keys
+    final orphanConfigKeys = _configs.keys.where((k) => !activeConfigKeys.contains(k)).toList();
+    for (final k in orphanConfigKeys) {
+      _configs.remove(k);
+      removedCount++;
+    }
+    if (orphanConfigKeys.isNotEmpty) {
+      await _persistConfigs();
+    }
+
+    return removedCount;
   }
 
   /// Loads YAML plugins from the plugins/scrapers/ directory into the registry.
@@ -205,7 +264,31 @@ class ScraperRegistry {
       } catch (_) {}
     }
 
-    // 4. Ensure default Supertags (e.g. JAV) are seeded with schema fields
+    // 4. Scraper custom confidences
+    final confidenceSetting = await (_db.select(_db.settings)
+          ..where((tbl) => tbl.key.equals('scraper_confidences')))
+        .getSingleOrNull();
+
+    if (confidenceSetting != null) {
+      try {
+        final decoded = jsonDecode(confidenceSetting.valueJson);
+        if (decoded is Map<String, dynamic>) {
+          for (final entry in decoded.entries) {
+            if (entry.value is Map) {
+              final fieldMap = <String, double>{};
+              (entry.value as Map).forEach((k, v) {
+                if (v is num) {
+                  fieldMap[k.toString()] = v.toDouble();
+                }
+              });
+              _customConfidences[entry.key] = fieldMap;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 5. Ensure default Supertags (e.g. JAV) are seeded with schema fields
     await _ensureDefaultSupertags();
   }
 
@@ -293,6 +376,16 @@ class ScraperRegistry {
     await _db.into(_db.settings).insertOnConflictUpdate(
       SettingsCompanion.insert(
         key: 'scraper_configs',
+        valueJson: jsonStr,
+      ),
+    );
+  }
+
+  Future<void> _persistConfidences() async {
+    final jsonStr = jsonEncode(_customConfidences);
+    await _db.into(_db.settings).insertOnConflictUpdate(
+      SettingsCompanion.insert(
+        key: 'scraper_confidences',
         valueJson: jsonStr,
       ),
     );
@@ -390,6 +483,7 @@ class ScraperRegistry {
             resolvedEntityId = entity.id;
           }
 
+          final effectiveConfidence = getEffectiveConfidence(scraper.id, pf.key, pf.confidence);
           final saved = await _fieldValueRepo.setAutomatedFieldValue(
             resourceId: input.resource.id,
             key: pf.key,
@@ -397,7 +491,7 @@ class ScraperRegistry {
             valueNum: pf.valueNum,
             entityId: resolvedEntityId,
             source: pf.source,
-            confidence: pf.confidence,
+            confidence: effectiveConfidence,
           );
           addedFields.add(saved);
         }
@@ -543,6 +637,181 @@ class ScraperRegistry {
     );
 
     return executePipeline(input, ctx: ctx);
+  }
+
+  /// Inspects candidate scrape results without immediately mutating the resource.
+  /// Used by UI verification dialogs.
+  Future<({ScrapeInput input, List<({Scraper scraper, ScrapeResult result})> results})> inspectResourceScrape(
+    String resourceId, {
+    ScrapeContext? ctx,
+  }) async {
+    final item = await _resourceRepo.getResourceWithLocations(resourceId);
+    if (item == null) {
+      throw ArgumentError('Resource not found: $resourceId');
+    }
+
+    final existingFieldsMap = <String, List<FieldValue>>{};
+    for (final f in item.fieldValues) {
+      existingFieldsMap.putIfAbsent(f.key, () => []).add(f);
+    }
+
+    final primaryLoc = item.primaryLocation;
+    final fileName = primaryLoc != null
+        ? p.basename(primaryLoc.path)
+        : (item.resource.title ?? '');
+    final sourceUrl = existingFieldsMap['source_url']?.firstOrNull?.valueText ??
+        item.resource.uri;
+
+    final input = ScrapeInput(
+      resource: item.resource,
+      fileName: fileName,
+      sourceUrl: sourceUrl,
+      existingFields: existingFieldsMap,
+      existingTags: item.tags,
+    );
+
+    final effectiveCtx = ctx ?? ScrapeContext(config: _configs);
+    final results = <({Scraper scraper, ScrapeResult result})>[];
+
+    final orderedScrapers = scrapers;
+    for (final scraper in orderedScrapers) {
+      if (!isScraperEnabled(scraper.id)) continue;
+      if (!scraper.canHandle(input)) continue;
+
+      try {
+        final res = await scraper.scrape(input, effectiveCtx);
+        if (!res.isEmpty) {
+          results.add((scraper: scraper, result: res));
+        }
+      } catch (e) {
+        effectiveCtx.log('inspectResourceScrape: Scraper ${scraper.id} failed: $e');
+      }
+    }
+
+    return (input: input, results: results);
+  }
+
+  /// Applies user-verified fields, tags, and title from a resolved ScrapeResult.
+  Future<ScrapePipelineResult> applyResolvedScrapeResult({
+    required String resourceId,
+    required ScrapeInput input,
+    required Scraper scraper,
+    required List<ProposedField> selectedFields,
+    required List<ProposedTag> selectedTags,
+    String? title,
+    String? previewImageUrl,
+    List<String> backfillSupertags = const [],
+  }) async {
+    final addedFields = <FieldValue>[];
+    final addedTagIds = <String>[];
+
+    // 1. Backfill Supertags
+    for (final st in backfillSupertags) {
+      final tag = await _tagRepo.findOrCreateTag(st, libraryId: input.resource.libraryId);
+      await _tagRepo.attachTagToResource(resourceId, tag.id, source: 'manual_verify:${scraper.id}');
+      addedTagIds.add(tag.id);
+    }
+
+    // 2. Save selected fields
+    for (final pf in selectedFields) {
+      String? resolvedEntityId;
+      if (pf.entityName != null && pf.entityName!.trim().isNotEmpty) {
+        final entity = await _entityRepo.findOrCreateEntity(
+          pf.entityType ?? 'other',
+          pf.entityName!.trim(),
+        );
+        resolvedEntityId = entity.id;
+      }
+
+      final FieldValue saved;
+      if (pf.source == 'user') {
+        // User manually customized this value in verification dialog -> source='user', confidence=1.0, locked=true
+        saved = await _fieldValueRepo.setUserFieldValue(
+          resourceId: resourceId,
+          key: pf.key,
+          valueText: pf.valueText,
+          valueNum: pf.valueNum,
+          entityId: resolvedEntityId,
+        );
+      } else {
+        // Unmodified automated value -> source='scraper:xxx', confidence=effectiveConfidence, locked=false
+        final effectiveConfidence = getEffectiveConfidence(scraper.id, pf.key, pf.confidence);
+        saved = await _fieldValueRepo.setAutomatedFieldValue(
+          resourceId: resourceId,
+          key: pf.key,
+          valueText: pf.valueText,
+          valueNum: pf.valueNum,
+          entityId: resolvedEntityId,
+          source: pf.source,
+          confidence: effectiveConfidence,
+        );
+      }
+      addedFields.add(saved);
+    }
+
+    // 3. Save selected tags
+    for (final pt in selectedTags) {
+      if (pt.tagPath.isEmpty) continue;
+      final tagId = await _findOrCreateTagPath(pt.tagPath, libraryId: input.resource.libraryId);
+      if (tagId != null) {
+        await _tagRepo.attachTagToResource(
+          resourceId,
+          tagId,
+          source: 'manual_verify:${scraper.id}',
+        );
+        addedTagIds.add(tagId);
+      }
+    }
+
+    // 4. Update title
+    if (title != null && title.trim().isNotEmpty) {
+      await _resourceRepo.updateResource(
+        ResourcesCompanion(
+          id: Value(resourceId),
+          title: Value(title.trim()),
+          updatedAt: Value(DateTime.now().toUtc().millisecondsSinceEpoch),
+        ),
+      );
+    }
+
+    // 5. Update cover image if provided
+    if (previewImageUrl != null && previewImageUrl.startsWith('http')) {
+      try {
+        final client = http.Client();
+        try {
+          final imgUri = Uri.parse(previewImageUrl);
+          final response = await client.get(
+            imgUri,
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Referer': '${imgUri.scheme}://${imgUri.host}/',
+            },
+          ).timeout(const Duration(seconds: 15));
+
+          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+            final thumbService = _thumbnailService;
+            if (thumbService != null) {
+              await thumbService.saveRemoteCoverAsThumbnail(
+                resourceId,
+                response.bodyBytes,
+              );
+              ThumbnailWidget.invalidateCache(resourceId);
+            }
+          }
+        } finally {
+          client.close();
+        }
+      } catch (_) {}
+    }
+
+    return ScrapePipelineResult(
+      updatedTitle: title,
+      previewImageUrl: previewImageUrl,
+      addedOrUpdatedFields: addedFields,
+      addedTagIds: addedTagIds,
+      backfilledSupertags: backfillSupertags,
+    );
   }
 
   Future<String?> _findOrCreateTagPath(List<String> path, {String? libraryId}) async {
