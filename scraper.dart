@@ -65,16 +65,31 @@ class ProposedField {
   }
 }
 
-/// A tag proposed by a scraper.
 class ProposedTag {
   /// Path of tags (e.g. `['Anime', 'Fanart']` or `['Wallpaper']`).
   final List<String> tagPath;
   final double confidence;
 
+  /// Optional un-interpolated template rule (e.g. `'JAV / 片商 / {studio}'`).
+  final String? rawTemplate;
+
   const ProposedTag({
     required this.tagPath,
     this.confidence = 0.8,
+    this.rawTemplate,
   });
+
+  ProposedTag copyWith({
+    List<String>? tagPath,
+    double? confidence,
+    String? rawTemplate,
+  }) {
+    return ProposedTag(
+      tagPath: tagPath ?? this.tagPath,
+      confidence: confidence ?? this.confidence,
+      rawTemplate: rawTemplate ?? this.rawTemplate,
+    );
+  }
 }
 
 /// A candidate item discovered during scraping (e.g. search results).

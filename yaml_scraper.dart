@@ -729,7 +729,11 @@ class YamlScraper implements Scraper {
         if (!RegExp(r'\{[a-zA-Z0-9_]+\}').hasMatch(resolvedTag)) {
           final parts = resolvedTag.split('/').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
           if (parts.isNotEmpty) {
-            extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.9));
+            extractedTags.add(ProposedTag(
+              tagPath: parts,
+              confidence: 0.9,
+              rawTemplate: tagDef.contains('{') ? tagDef : null,
+            ));
           }
         }
       }
