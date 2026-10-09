@@ -539,7 +539,7 @@ class ScraperRegistry {
         final uri = Uri.tryParse(checkPath);
         final pathToCheck = uri != null && uri.path.isNotEmpty ? uri.path : checkPath;
         if (p.extension(pathToCheck).isNotEmpty) {
-          final refinedType = MediaTypes.detectMediaType(pathToCheck);
+          final refinedType = await MediaTypes.detectMediaType(pathToCheck);
           final refinedMime = MediaTypes.detectMime(pathToCheck);
           if (refinedType != 'other') {
             await _resourceRepo.updateResource(
