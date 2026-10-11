@@ -21,6 +21,9 @@ class DoubanScraper implements Scraper {
   int get priority => 85;
 
   @override
+  List<String> get mediaTypes => const [];
+
+  @override
   List<String> get targetSupertags => const ['电影', 'Movie', '图书', '书籍', 'Book'];
 
   @override

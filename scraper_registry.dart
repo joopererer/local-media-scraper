@@ -415,6 +415,24 @@ class ScraperRegistry {
     final orderedScrapers = scrapers; // already sorted by priority descending
     for (final scraper in orderedScrapers) {
       if (!isScraperEnabled(scraper.id)) continue;
+
+      // Guard: media types check for Tier 1 supertag backfill
+      if (scraper.mediaTypes.isNotEmpty) {
+        var resType = input.resource.mediaType?.toLowerCase();
+        if (resType == null || resType.isEmpty || resType == MediaTypes.other) {
+          final checkPath = input.resource.uri ?? input.fileName ?? '';
+          if (checkPath.isNotEmpty) {
+            resType = MediaTypes.detectMediaTypeFromExtension(checkPath);
+          }
+        }
+        if (resType != null && resType.isNotEmpty && resType != MediaTypes.other && !scraper.mediaTypes.contains(resType)) {
+          continue;
+        }
+        if (scraper.mediaTypes.length == 1 && scraper.mediaTypes.first == MediaTypes.video && resType != MediaTypes.video) {
+          continue;
+        }
+      }
+
       if (scraper.patternRegex != null && scraper.patternRegex!.hasMatch(targetStr)) {
         final stBackfill = scraper.supertagToBackfill;
         if (stBackfill != null && stBackfill.isNotEmpty) {
@@ -828,6 +846,48 @@ class ScraperRegistry {
       currentParentId = tag.id;
     }
     return currentParentId;
+  }
+
+  /// Cleans up any incorrectly tagged JAV supertags/tags on non-video resources (e.g. images).
+  /// Returns the number of removed associations.
+  Future<int> removeJavTagsFromNonVideos() async {
+    final javRootTag = await (_db.select(_db.tags)..where((t) => t.name.equals('JAV'))).getSingleOrNull();
+    if (javRootTag == null) return 0;
+
+    final allTags = await _db.select(_db.tags).get();
+    final javTagIds = <String>{javRootTag.id};
+    bool addedNew = true;
+    while (addedNew) {
+      addedNew = false;
+      for (final t in allTags) {
+        if (t.parentId != null && javTagIds.contains(t.parentId) && !javTagIds.contains(t.id)) {
+          javTagIds.add(t.id);
+          addedNew = true;
+        }
+      }
+    }
+
+    final query = _db.select(_db.resourceTags).join([
+      innerJoin(_db.resources, _db.resources.id.equalsExp(_db.resourceTags.resourceId)),
+    ])..where(_db.resourceTags.tagId.isIn(javTagIds) & _db.resources.mediaType.isNotValue('video'));
+
+    final rows = await query.get();
+    if (rows.isEmpty) return 0;
+
+    final affectedResourceIds = <String>{};
+    for (final row in rows) {
+      final rt = row.readTable(_db.resourceTags);
+      affectedResourceIds.add(rt.resourceId);
+      await (_db.delete(_db.resourceTags)
+            ..where((tbl) => tbl.resourceId.equals(rt.resourceId) & tbl.tagId.equals(rt.tagId)))
+          .go();
+    }
+
+    for (final resId in affectedResourceIds) {
+      await _tagRepo.syncFtsTags(resId);
+    }
+
+    return rows.length;
   }
 }
 

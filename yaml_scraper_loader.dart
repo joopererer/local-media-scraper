@@ -224,7 +224,7 @@ media_types:
   - video
 target_supertags:
   - JAV
-pattern: '(?<![a-zA-Z0-9])([a-zA-Z]{2,6})[-_](\\d{2,5})(?![a-zA-Z0-9])'
+pattern: '(?<![a-zA-Z0-9])(?!(?:IMG|DSC|PIC|PHOTO|RAW|SCAN|DOC|FILE|TEST|SAMPLE|COVER|POSTER|PAGE|ITEM|THUMB|PART|DISC|MP|EP|CH|VOL)[-_])([a-zA-Z]{2,6})[-_](\\d{2,5})(?![a-zA-Z0-9])'
 supertag_to_backfill:
   - JAV
 request:

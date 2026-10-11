@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:yaml/yaml.dart';
 
+import '../../core/media_types.dart';
 import 'scraper.dart';
 
 /// Configuration schema field definition for a YAML scraper.
@@ -318,6 +319,7 @@ class YamlScraper implements Scraper {
   @override
   List<String>? get supertagToBackfill => _supertagToBackfill;
 
+  @override
   List<String> get mediaTypes => List.unmodifiable(_mediaTypes);
 
   List<YamlConfigSchema> get configSchema => List.unmodifiable(_configSchema);
@@ -436,8 +438,17 @@ class YamlScraper implements Scraper {
   bool canHandle(ScrapeInput input) {
     // 0. Check media type restriction if specified
     if (_mediaTypes.isNotEmpty) {
-      final resType = input.resource.mediaType?.toLowerCase();
-      if (resType != null && resType.isNotEmpty && !_mediaTypes.contains(resType)) {
+      var resType = input.resource.mediaType?.toLowerCase();
+      if (resType == null || resType.isEmpty || resType == MediaTypes.other) {
+        final checkPath = input.resource.uri ?? input.fileName ?? '';
+        if (checkPath.isNotEmpty) {
+          resType = MediaTypes.detectMediaTypeFromExtension(checkPath);
+        }
+      }
+      if (resType != null && resType.isNotEmpty && resType != MediaTypes.other && !_mediaTypes.contains(resType)) {
+        return false;
+      }
+      if (_mediaTypes.length == 1 && _mediaTypes.first == MediaTypes.video && resType != MediaTypes.video) {
         return false;
       }
     }

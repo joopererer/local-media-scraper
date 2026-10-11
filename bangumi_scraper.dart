@@ -22,6 +22,9 @@ class BangumiScraper implements Scraper {
   int get priority => 85;
 
   @override
+  List<String> get mediaTypes => const [];
+
+  @override
   List<String> get targetSupertags => const ['番剧', 'Anime', '动画', '漫画', 'Manga', 'ACG'];
 
   @override

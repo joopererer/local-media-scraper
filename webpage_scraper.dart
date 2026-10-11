@@ -21,6 +21,9 @@ class WebPageScraper implements Scraper {
   int get priority => 10;
 
   @override
+  List<String> get mediaTypes => const [];
+
+  @override
   List<String> get targetSupertags => const [];
 
   @override

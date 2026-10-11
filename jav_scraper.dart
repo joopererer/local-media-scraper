@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../../core/media_types.dart';
 import 'scraper.dart';
 
 /// Scraper for adult video (JAV) metadata, identifying standard designation codes
@@ -23,11 +24,14 @@ class JavScraper implements Scraper {
   int get priority => 80;
 
   @override
+  List<String> get mediaTypes => const [MediaTypes.video];
+
+  @override
   List<String> get targetSupertags => const ['JAV', 'AV', 'Adult'];
 
   @override
   RegExp? get patternRegex => RegExp(
-        r'\b([a-zA-Z]{2,6})[-_]?(\d{2,5})\b|(fc2[-_]?ppv[-_]?\d{5,8})',
+        r'\b(?!(?:IMG|DSC|PIC|PHOTO|RAW|SCAN|DOC|FILE|TEST|SAMPLE|COVER|POSTER|PAGE|ITEM|THUMB|PART|DISC|MP|EP|CH|VOL)[-_])([a-zA-Z]{2,6})[-_]?(\d{2,5})\b|(fc2[-_]?ppv[-_]?\d{5,8})',
         caseSensitive: false,
       );
 
@@ -69,6 +73,18 @@ class JavScraper implements Scraper {
 
   @override
   bool canHandle(ScrapeInput input) {
+    // 0. Strict media type check: JAV scraper only applies to video files!
+    var resType = input.resource.mediaType?.toLowerCase();
+    if (resType == null || resType.isEmpty || resType == MediaTypes.other) {
+      final checkPath = input.resource.uri ?? input.fileName ?? '';
+      if (checkPath.isNotEmpty) {
+        resType = MediaTypes.detectMediaTypeFromExtension(checkPath);
+      }
+    }
+    if (resType != MediaTypes.video) {
+      return false;
+    }
+
     // 1. Check existing supertags
     final tags = input.existingTagNames;
     if (targetSupertags.any((st) => tags.contains(st.toLowerCase()))) {
@@ -413,6 +429,34 @@ class JavScraper implements Scraper {
       );
   }
 
+  static const Set<String> _excludedPrefixes = {
+    'MP',
+    'PART',
+    'DISC',
+    'EP',
+    'CH',
+    'VOL',
+    'IMG',
+    'DSC',
+    'PIC',
+    'PHOTO',
+    'RAW',
+    'SCAN',
+    'DOC',
+    'FILE',
+    'TEST',
+    'SAMPLE',
+    'COVER',
+    'POSTER',
+    'BACK',
+    'FRONT',
+    'PAGE',
+    'ITEM',
+    'THUMB',
+    'SCREEN',
+    'CLIP',
+  };
+
   /// Extracts and formats designation code to standard uppercase with hyphen: e.g. `SSIS-001`.
   static String? extractJavCode(String text) {
     // 1. FC2 PPV
@@ -422,12 +466,15 @@ class JavScraper implements Scraper {
     }
 
     // 2. Standard Letter-Digits code
-    final stdMatch = RegExp(r'\b([a-zA-Z]{2,6})[-_]?(\d{2,5})\b').firstMatch(text);
+    final stdMatch = RegExp(
+      r'\b(?!(?:IMG|DSC|PIC|PHOTO|RAW|SCAN|DOC|FILE|TEST|SAMPLE|COVER|POSTER|PAGE|ITEM|THUMB|PART|DISC|MP|EP|CH|VOL)[-_])([a-zA-Z]{2,6})[-_]?(\d{2,5})\b',
+      caseSensitive: false,
+    ).firstMatch(text);
     if (stdMatch != null) {
       final letters = stdMatch.group(1)!.toUpperCase();
       final digits = stdMatch.group(2)!;
-      // Filter out common false positives like "MP4-1080", "PART-01", "DISC-1"
-      if (['MP', 'PART', 'DISC', 'EP', 'CH', 'VOL'].contains(letters)) {
+      // Filter out common false positives like "MP4-1080", "IMG_1234", "DSC_0001", etc.
+      if (_excludedPrefixes.contains(letters)) {
         return null;
       }
       return '$letters-$digits';

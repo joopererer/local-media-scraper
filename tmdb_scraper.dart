@@ -22,6 +22,9 @@ class TmdbScraper implements Scraper {
   int get priority => 90;
 
   @override
+  List<String> get mediaTypes => const ['video'];
+
+  @override
   List<String> get targetSupertags => const ['电影', 'Movie', '剧集', 'Series', '电视剧'];
 
   @override
