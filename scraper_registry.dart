@@ -874,17 +874,12 @@ class ScraperRegistry {
     final rows = await query.get();
     if (rows.isEmpty) return 0;
 
-    final affectedResourceIds = <String>{};
+    // resource_fts tag text follows through trg_fts_rt_delete.
     for (final row in rows) {
       final rt = row.readTable(_db.resourceTags);
-      affectedResourceIds.add(rt.resourceId);
       await (_db.delete(_db.resourceTags)
             ..where((tbl) => tbl.resourceId.equals(rt.resourceId) & tbl.tagId.equals(rt.tagId)))
           .go();
-    }
-
-    for (final resId in affectedResourceIds) {
-      await _tagRepo.syncFtsTags(resId);
     }
 
     return rows.length;
