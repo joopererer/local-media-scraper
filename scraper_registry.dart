@@ -48,7 +48,7 @@ class ScraperRegistry {
   final EntityRepository _entityRepo;
   final TagRepository _tagRepo;
   final ThumbnailService? _thumbnailService;
-  final YamlScraperLoader _yamlLoader;
+  YamlScraperLoader _yamlLoader;
 
   final List<Scraper> _scrapers = [];
   final Map<String, bool> _enabledStates = {};
@@ -94,6 +94,11 @@ class ScraperRegistry {
   }
 
   YamlScraperLoader get yamlLoader => _yamlLoader;
+
+  /// 替换 YAML 加载器（provider 在用户目录就绪后调用）。
+  void setYamlLoader(YamlScraperLoader loader) {
+    _yamlLoader = loader;
+  }
 
   /// Registers a custom or overridden scraper.
   void registerScraper(Scraper scraper) {
@@ -887,6 +892,9 @@ class ScraperRegistry {
 }
 
 /// Provider for [ScraperRegistry].
+///
+/// 默认插件目录：应用数据目录 `plugins/scrapers`（见 [YamlScraperLoader.inUserDir]），
+/// 不再依赖当前工作目录。构造时触发一次内置同步（含哈希升级规则）。
 final scraperRegistryProvider = Provider<ScraperRegistry>((ref) {
   final db = ref.watch(appDatabaseProvider);
   final resourceRepo = ref.watch(resourceRepositoryProvider);
@@ -904,8 +912,11 @@ final scraperRegistryProvider = Provider<ScraperRegistry>((ref) {
     thumbnailService: thumbService,
   );
 
-  // Asynchronously load settings and yaml plugins
-  registry.loadSettings().then((_) => registry.loadYamlPlugins());
+  // Asynchronously sync builtins, then load settings and yaml plugins
+  YamlScraperLoader.inUserDir().then((loader) {
+    registry.setYamlLoader(loader);
+    registry.loadSettings().then((_) => registry.loadYamlPlugins());
+  });
 
   return registry;
 });
