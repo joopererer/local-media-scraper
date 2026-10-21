@@ -16,7 +16,6 @@ import '../../data/repositories/tag_repository.dart';
 import 'bangumi_scraper.dart';
 import 'douban_scraper.dart';
 import 'filename_scraper.dart';
-import 'jav_scraper.dart';
 import 'scraper.dart';
 import 'tmdb_scraper.dart';
 import 'webpage_scraper.dart';
@@ -79,7 +78,6 @@ class ScraperRegistry {
       _scrapers.add(TmdbScraper());
       _scrapers.add(DoubanScraper());
       _scrapers.add(BangumiScraper());
-      _scrapers.add(JavScraper());
       // Register universal fallbacks
       _scrapers.add(FileNameScraper());
       _scrapers.add(WebPageScraper());
@@ -184,7 +182,7 @@ class ScraperRegistry {
     }
 
     // 2. Collect all active config keys declared by active scrapers (via YamlScraper.configSchema)
-    final activeConfigKeys = <String>{'tmdb_api_key', 'proxy_url', 'javbus_base_url'};
+    final activeConfigKeys = <String>{'tmdb_api_key', 'proxy_url'};
     for (final s in _scrapers) {
       if (s is YamlScraper) {
         for (final cs in s.configSchema) {
@@ -297,21 +295,14 @@ class ScraperRegistry {
     await _ensureDefaultSupertags();
   }
 
-  /// Ensures that standard Supertags (JAV, 电影, 番剧) exist in the database with their schema fields.
+  /// Ensures that standard Supertags (电影, 番剧) exist in the database with their schema fields.
   Future<void> _ensureDefaultSupertags() async {
     try {
       final defaultSupertags = <String, List<(String, String, String, String?, bool, int)>>{
-        'JAV': [
-          ('code', '番号', 'string', null, false, 0),
-          ('title', '片名', 'string', null, false, 1),
-          ('studio', '片商', 'entity', 'studio', false, 2),
-          ('actress', '女优', 'entity', 'actress', true, 3),
-          ('year', '发行年份', 'number', null, false, 4),
-        ],
         '电影': [
           ('title', '片名', 'string', null, false, 0),
           ('director', '导演', 'entity', 'director', false, 1),
-          ('actress', '主要演员', 'entity', 'actress', true, 2),
+          ('actor', '主要演员', 'entity', 'person', true, 2),
           ('year', '发行年份', 'number', null, false, 3),
           ('rating', '豆瓣/TMDB评分', 'number', null, false, 4),
           ('summary', '剧情简介', 'string', null, false, 5),
@@ -335,6 +326,14 @@ class ScraperRegistry {
         for (final (key, label, valueType, entityType, multi, sortOrder) in fields) {
           final existingField = existingFields.where((f) => f.key == key).firstOrNull;
           if (existingField == null) {
+            // Avoid adding a duplicate actor-like field when the tag already
+            // has an 'actress' (legacy) or 'actor' field for the same role.
+            if (key == 'actor' &&
+                existingFields.any(
+                  (f) => f.key == 'actress' || f.key == 'actor',
+                )) {
+              continue;
+            }
             await _tagRepo.createTagField(
               tagId: tag.id,
               key: key,
@@ -854,41 +853,6 @@ class ScraperRegistry {
   }
 
   /// Cleans up any incorrectly tagged JAV supertags/tags on non-video resources (e.g. images).
-  /// Returns the number of removed associations.
-  Future<int> removeJavTagsFromNonVideos() async {
-    final javRootTag = await (_db.select(_db.tags)..where((t) => t.name.equals('JAV'))).getSingleOrNull();
-    if (javRootTag == null) return 0;
-
-    final allTags = await _db.select(_db.tags).get();
-    final javTagIds = <String>{javRootTag.id};
-    bool addedNew = true;
-    while (addedNew) {
-      addedNew = false;
-      for (final t in allTags) {
-        if (t.parentId != null && javTagIds.contains(t.parentId) && !javTagIds.contains(t.id)) {
-          javTagIds.add(t.id);
-          addedNew = true;
-        }
-      }
-    }
-
-    final query = _db.select(_db.resourceTags).join([
-      innerJoin(_db.resources, _db.resources.id.equalsExp(_db.resourceTags.resourceId)),
-    ])..where(_db.resourceTags.tagId.isIn(javTagIds) & _db.resources.mediaType.isNotValue('video'));
-
-    final rows = await query.get();
-    if (rows.isEmpty) return 0;
-
-    // resource_fts tag text follows through trg_fts_rt_delete.
-    for (final row in rows) {
-      final rt = row.readTable(_db.resourceTags);
-      await (_db.delete(_db.resourceTags)
-            ..where((tbl) => tbl.resourceId.equals(rt.resourceId) & tbl.tagId.equals(rt.tagId)))
-          .go();
-    }
-
-    return rows.length;
-  }
 }
 
 /// Provider for [ScraperRegistry].

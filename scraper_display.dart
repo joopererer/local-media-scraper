@@ -11,8 +11,6 @@ String displayScraperName(AppLocalizations l10n, Scraper scraper) {
       return l10n.scraper_nameDouban;
     case 'filename':
       return l10n.scraper_nameFilename;
-    case 'jav':
-      return l10n.scraper_nameJav;
     case 'webpage':
       return l10n.scraper_nameWebpage;
     case 'tmdb':
@@ -31,8 +29,6 @@ String displayScraperDescription(AppLocalizations l10n, Scraper scraper) {
       return l10n.scraper_descDouban;
     case 'filename':
       return l10n.scraper_descFilename;
-    case 'jav':
-      return l10n.scraper_descJav;
     case 'webpage':
       return l10n.scraper_descWebpage;
     case 'tmdb':
