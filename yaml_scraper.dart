@@ -823,14 +823,15 @@ class YamlScraper implements Scraper {
           effectiveConfidence = val['confidence'] is num 
               ? (val['confidence'] as num).toDouble() 
               : rule.confidence;
-        } else if (rule.source.startsWith('prefix_map:')) {
-          // Fallback: use confidence_known or confidence_unknown based on whether we found mapping
+        } else if (rule.source.startsWith('value_map:') || rule.source.startsWith('prefix_map:')) {
+          // Use confidence_known or confidence_unknown based on whether we found mapping
           if (val is Map && val['value'] != null) {
-            // Check if it's a mapped value or fallback prefix
-            final mapName = rule.source.substring(11);
-            final prefix = (match?.group(1) ?? '').toUpperCase();
+            // Check if it's a mapped value or fallback
+            final isExactOnly = rule.source.startsWith('value_map:');
+            final mapName = rule.source.substring(isExactOnly ? 10 : 11);
+            final key = (match?.group(1) ?? '').toUpperCase();
             final isKnown = _valueMaps.containsKey(mapName) && 
-                            _valueMaps[mapName]!.containsKey(prefix);
+                            _valueMaps[mapName]!.containsKey(key);
             if (isKnown && rule.confidenceKnown != null) {
               effectiveConfidence = rule.confidenceKnown!;
             } else if (!isKnown && rule.confidenceUnknown != null) {
@@ -956,25 +957,32 @@ class YamlScraper implements Scraper {
         return match.group(idx);
       }
       return null;
-    } else if (source.startsWith('prefix_map:')) {
-      // Resolve prefix value using value_maps table
-      // Returns a map with 'value' and 'confidence' for caller to handle separately
-      final mapName = source.substring(11);
+    } else if (source.startsWith('value_map:') || source.startsWith('prefix_map:')) {
+      // Resolve value using value_maps table
+      // value_map: exact match only (no fallback)
+      // prefix_map: exact match with fallback to prefix itself
+      final isExactOnly = source.startsWith('value_map:');
+      final mapName = source.substring(isExactOnly ? 10 : 11);
       if (!_valueMaps.containsKey(mapName)) return null;
       
-      // Extract prefix from match group 0 (first captured group from pattern)
+      // Extract lookup key from match group 1 (first captured group from pattern)
       if (match == null || match.groupCount < 1) return null;
-      final prefix = match.group(1)?.toUpperCase() ?? '';
-      if (prefix.isEmpty) return null;
+      final key = match.group(1)?.toUpperCase() ?? '';
+      if (key.isEmpty) return null;
       
       final valueMap = _valueMaps[mapName]!;
-      if (valueMap.containsKey(prefix)) {
-        final entry = valueMap[prefix]!;
+      if (valueMap.containsKey(key)) {
+        final entry = valueMap[key]!;
         return {'value': entry.value, 'confidence': entry.confidence};
       }
       
-      // Return prefix itself with lower confidence as fallback
-      return {'value': prefix, 'confidence': 0.7};
+      // value_map: no match -> return null
+      // prefix_map: no match -> return prefix itself as fallback
+      if (isExactOnly) {
+        return null;
+      } else {
+        return {'value': key, 'confidence': 0.7};
+      }
     } else if (source.startsWith('static:')) {
       return source.substring(7);
     }
