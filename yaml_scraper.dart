@@ -220,6 +220,10 @@ class YamlScraper implements Scraper {
   final http.Client? _client;
   final Map<String, Map<String, YamlValueMapEntry>> _valueMaps; // Prefix mapping tables
 
+  /// Matches values that already carry a URI scheme (`https:`, `data:`) or are
+  /// protocol-relative (`//host/path`), i.e. do not need a base URL prefix.
+  static final RegExp _absoluteUriPattern = RegExp(r'^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:|//)');
+
   YamlScraper({
     required String id,
     required String displayName,
@@ -662,8 +666,16 @@ class YamlScraper implements Scraper {
             extraHeaders: reqUrlDef.headers,
             timeoutSeconds: reqUrlDef.timeoutSeconds,
           );
-          if (res.body != null) {
-            responseBody = res.body;
+          final body = res.body;
+          if (body != null) {
+            final rejection = _bodyGuardRejection(body, reqUrlDef);
+            if (rejection != null) {
+              // Age gates usually answer 200, so a body check is the only way to
+              // tell them apart from a real detail page.
+              ctx.log('YamlScraper($_id): $requestUrl 正文校验未通过（$rejection），尝试下一个地址'); // i18n:ignore 日志
+              continue;
+            }
+            responseBody = body;
             jsonRoot = res.json;
             break; // Success, stop cascade
           }
@@ -798,7 +810,12 @@ class YamlScraper implements Scraper {
         
         if (valStr.isEmpty) continue;
 
-        if (rule.prefix != null && !valStr.startsWith(rule.prefix!)) {
+        // `prefix` acts as a base URL for relative references (e.g. a cover path
+        // like `/pics/cover/x.jpg`): it is skipped for values that are already
+        // absolute so a scraper can hit both relative and absolute markup.
+        if (rule.prefix != null &&
+            !valStr.startsWith(rule.prefix!) &&
+            !_absoluteUriPattern.hasMatch(valStr)) {
           valStr = '${rule.prefix}$valStr';
         }
         if (rule.suffix != null && !valStr.endsWith(rule.suffix!)) {
@@ -928,6 +945,23 @@ class YamlScraper implements Scraper {
       tags: extractedTags,
       candidates: extractedCandidates,
     );
+  }
+
+  /// Returns a human-readable reason when [body] fails the cascade entry's
+  /// `require_body_contains` / `reject_body_contains` guard, or null when it passes.
+  static String? _bodyGuardRejection(String body, YamlRequestUrl def) {
+    final lower = body.toLowerCase();
+    for (final marker in def.requireBodyContains) {
+      if (!lower.contains(marker.toLowerCase())) {
+        return 'require_body_contains: $marker';
+      }
+    }
+    for (final marker in def.rejectBodyContains) {
+      if (lower.contains(marker.toLowerCase())) {
+        return 'reject_body_contains: $marker';
+      }
+    }
+    return null;
   }
 
   /// Resolves value from json, regex, static definition, or prefix mapping table.
