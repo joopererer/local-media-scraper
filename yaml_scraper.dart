@@ -685,7 +685,7 @@ class YamlScraper implements Scraper {
 
       // Guard: if any unreplaced placeholder remains, abort request
       if (RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(requestUrl)) {
-        ctx.log('YamlScraper($_id): 匹配未命中或占位符未替换完毕 ($requestUrl)，跳过网络请求');
+        ctx.log('YamlScraper($_id): 匹配未命中或占位符未替换完毕 ($requestUrl)，跳过网络请求'); // i18n:ignore 日志
       } else {
         final res = await fetchUrl(requestUrl);
         responseBody = res.body;
@@ -758,7 +758,7 @@ class YamlScraper implements Scraper {
         );
 
         if (!RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(detailUrl)) {
-          ctx.log('YamlScraper($_id): 命中唯一候选结果，自动执行二级深挖 -> $detailUrl');
+          ctx.log('YamlScraper($_id): 命中唯一候选结果，自动执行二级深挖 -> $detailUrl'); // i18n:ignore 日志
           final detailRes = await fetchUrl(detailUrl);
           if (detailRes.body != null) {
             responseBody = detailRes.body;

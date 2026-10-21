@@ -25,7 +25,7 @@ class BangumiScraper implements Scraper {
   List<String> get mediaTypes => const [];
 
   @override
-  List<String> get targetSupertags => const ['番剧', 'Anime', '动画', '漫画', 'Manga', 'ACG'];
+  List<String> get targetSupertags => const ['番剧', 'Anime', '动画', '漫画', 'Manga', 'ACG']; // i18n:ignore 数据库标识符
 
   @override
   RegExp? get patternRegex => RegExp(
@@ -34,7 +34,7 @@ class BangumiScraper implements Scraper {
       );
 
   @override
-  List<String>? get supertagToBackfill => const ['番剧'];
+  List<String>? get supertagToBackfill => const ['番剧']; // i18n:ignore 数据库标识符
 
   @override
   bool canHandle(ScrapeInput input) {
@@ -121,7 +121,7 @@ class BangumiScraper implements Scraper {
           ),
         ],
         tags: const [
-          ProposedTag(tagPath: ['ACG', '番剧'], confidence: 0.95),
+          ProposedTag(tagPath: ['ACG', '番剧'], confidence: 0.95), // i18n:ignore 数据库标识符
         ],
       );
     }
@@ -181,7 +181,7 @@ class BangumiScraper implements Scraper {
 
     // Tags
     final tags = <ProposedTag>[
-      const ProposedTag(tagPath: ['ACG', '番剧'], confidence: 0.95),
+      const ProposedTag(tagPath: ['ACG', '番剧'], confidence: 0.95), // i18n:ignore 数据库标识符
     ];
     final tagList = data['tags'] as List<dynamic>? ?? const [];
     for (final t in tagList.take(5)) {

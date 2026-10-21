@@ -24,7 +24,7 @@ class DoubanScraper implements Scraper {
   List<String> get mediaTypes => const [];
 
   @override
-  List<String> get targetSupertags => const ['电影', 'Movie', '图书', '书籍', 'Book'];
+  List<String> get targetSupertags => const ['电影', 'Movie', '图书', '书籍', 'Book']; // i18n:ignore 数据库标识符
 
   @override
   RegExp? get patternRegex => RegExp(
@@ -33,7 +33,7 @@ class DoubanScraper implements Scraper {
       );
 
   @override
-  List<String>? get supertagToBackfill => const ['电影'];
+  List<String>? get supertagToBackfill => const ['电影']; // i18n:ignore 数据库标识符
 
   @override
   bool canHandle(ScrapeInput input) {
@@ -96,7 +96,7 @@ class DoubanScraper implements Scraper {
       return ScrapeResult(
         proposedTitle: clean,
         tags: const [
-          ProposedTag(tagPath: ['豆瓣'], confidence: 0.8),
+          ProposedTag(tagPath: ['豆瓣'], confidence: 0.8), // i18n:ignore 数据库标识符
         ],
       );
     }
@@ -187,10 +187,10 @@ class DoubanScraper implements Scraper {
     }
 
     final tags = <ProposedTag>[
-      const ProposedTag(tagPath: ['影视'], confidence: 0.9),
+      const ProposedTag(tagPath: ['影视'], confidence: 0.9), // i18n:ignore 数据库标识符
     ];
     for (final g in genres) {
-      tags.add(ProposedTag(tagPath: ['影视', g], confidence: 0.9));
+      tags.add(ProposedTag(tagPath: ['影视', g], confidence: 0.9)); // i18n:ignore 数据库标识符
     }
 
     return ScrapeResult(

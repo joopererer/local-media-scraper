@@ -25,7 +25,7 @@ class TmdbScraper implements Scraper {
   List<String> get mediaTypes => const ['video'];
 
   @override
-  List<String> get targetSupertags => const ['电影', 'Movie', '剧集', 'Series', '电视剧'];
+  List<String> get targetSupertags => const ['电影', 'Movie', '剧集', 'Series', '电视剧']; // i18n:ignore 数据库标识符
 
   @override
   RegExp? get patternRegex => RegExp(
@@ -34,7 +34,7 @@ class TmdbScraper implements Scraper {
       );
 
   @override
-  List<String>? get supertagToBackfill => const ['电影'];
+  List<String>? get supertagToBackfill => const ['电影']; // i18n:ignore 数据库标识符
 
   @override
   bool canHandle(ScrapeInput input) {
@@ -124,7 +124,7 @@ class TmdbScraper implements Scraper {
           ),
         ],
         tags: const [
-          ProposedTag(tagPath: ['电影'], confidence: 0.9),
+          ProposedTag(tagPath: ['电影'], confidence: 0.9), // i18n:ignore 数据库标识符
         ],
       );
     }
@@ -212,14 +212,14 @@ class TmdbScraper implements Scraper {
 
     // Genres as tags
     final tags = <ProposedTag>[
-      ProposedTag(tagPath: isMovie ? ['电影'] : ['剧集'], confidence: 0.95),
+      ProposedTag(tagPath: isMovie ? ['电影'] : ['剧集'], confidence: 0.95), // i18n:ignore 数据库标识符
     ];
     final genres = data['genres'] as List<dynamic>? ?? const [];
     for (final g in genres) {
       final name = g['name'] as String?;
       if (name != null && name.isNotEmpty) {
         tags.add(ProposedTag(
-          tagPath: isMovie ? ['电影', name] : ['剧集', name],
+          tagPath: isMovie ? ['电影', name] : ['剧集', name], // i18n:ignore 数据库标识符
           confidence: 0.90,
         ));
       }
