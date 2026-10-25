@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -11,12 +12,14 @@ import '../../data/repositories/entity_repository.dart';
 import '../../data/repositories/field_value_repository.dart';
 import '../../data/repositories/resource_repository.dart';
 import '../../features/browser/widgets/thumbnail_widget.dart';
+import '../plugins/scraper_plugin_loader.dart';
 import '../services/thumbnail_service.dart';
 import '../../data/repositories/tag_repository.dart';
 import 'bangumi_scraper.dart';
 import 'douban_scraper.dart';
 import 'filename_scraper.dart';
 import 'scraper.dart';
+import 'scraper_planner.dart';
 import 'tmdb_scraper.dart';
 import 'webpage_scraper.dart';
 import 'yaml_scraper.dart';
@@ -54,6 +57,7 @@ class ScraperRegistry {
   final Map<String, int> _customPriorities = {};
   final Map<String, dynamic> _configs = {};
   final Map<String, Map<String, double>> _customConfidences = {};
+  StreamSubscription<List<YamlScraper>>? _pluginWatch;
 
   ScraperRegistry({
     required AppDatabase db,
@@ -206,7 +210,23 @@ class ScraperRegistry {
 
   /// Loads YAML plugins from the plugins/scrapers/ directory into the registry.
   Future<void> loadYamlPlugins() async {
-    final loaded = await _yamlLoader.loadScrapers();
+    _applyLoadedYamlPlugins(await _yamlLoader.loadScrapers());
+  }
+
+  /// Re-scans the plugin directory automatically whenever it changes.
+  ///
+  /// Safe to call more than once; only one subscription is kept.
+  void watchYamlPlugins({Duration debounce = const Duration(milliseconds: 400)}) {
+    if (_pluginWatch != null) return;
+    _pluginWatch = _yamlLoader.watch(debounce: debounce).listen(_applyLoadedYamlPlugins);
+  }
+
+  Future<void> dispose() async {
+    await _pluginWatch?.cancel();
+    _pluginWatch = null;
+  }
+
+  void _applyLoadedYamlPlugins(List<YamlScraper> loaded) {
     // Remove old YAML scrapers
     _scrapers.removeWhere((s) => s is YamlScraper);
     // Add newly loaded ones
@@ -395,150 +415,81 @@ class ScraperRegistry {
     );
   }
 
-  /// Executes two-tier scraper pipeline:
-  /// 1. Feature pattern match & automatic supertag backfilling.
-  /// 2. Supertag-targeted and universal scraper routing.
-  /// 3. Strict priority protection (Section 5.4).
+  /// Executes the scraper pipeline: dispatch via [ScraperPlanner] (no writes),
+  /// then applies the plan - backfilled supertags, fields, tags, title, media
+  /// type and cover image - to the database.
   Future<ScrapePipelineResult> executePipeline(
     ScrapeInput input, {
     ScrapeContext? ctx,
   }) async {
     final effectiveCtx = ctx ?? ScrapeContext(config: _configs);
+    final plan = await _planner().plan(input, ctx: effectiveCtx);
+    final subject = input.subject;
+
     final addedFields = <FieldValue>[];
     final addedTagIds = <String>[];
     final backfilledSupertags = <String>[];
-    String? bestTitle;
-    String? bestPreviewImage;
 
-    // Mutated working copy of tags to allow two-tier dispatch chaining
-    final workingExistingTags = List<Tag>.from(input.existingTags);
-    ScrapeInput currentInput = input;
-
-    // --- Tier 1: Feature Rule Pre-Dispatch & Supertag Backfilling ---
-    final targetStr = '${input.fileName ?? ''} ${input.sourceUrl ?? ''} ${input.resource.title ?? ''}'.trim();
-    final orderedScrapers = scrapers; // already sorted by priority descending
-    for (final scraper in orderedScrapers) {
-      if (!isScraperEnabled(scraper.id)) continue;
-
-      // Guard: media types check for Tier 1 supertag backfill
-      if (scraper.mediaTypes.isNotEmpty) {
-        var resType = input.resource.mediaType?.toLowerCase();
-        if (resType == null || resType.isEmpty || resType == MediaTypes.other) {
-          final checkPath = input.resource.uri ?? input.fileName ?? '';
-          if (checkPath.isNotEmpty) {
-            resType = MediaTypes.detectMediaTypeFromExtension(checkPath);
-          }
-        }
-        if (resType != null && resType.isNotEmpty && resType != MediaTypes.other && !scraper.mediaTypes.contains(resType)) {
-          continue;
-        }
-        if (scraper.mediaTypes.length == 1 && scraper.mediaTypes.first == MediaTypes.video && resType != MediaTypes.video) {
-          continue;
-        }
-      }
-
-      if (scraper.patternRegex != null && scraper.patternRegex!.hasMatch(targetStr)) {
-        final stBackfill = scraper.supertagToBackfill;
-        if (stBackfill != null && stBackfill.isNotEmpty) {
-          final tagPathStr = stBackfill.join(' / ');
-          final alreadyHas = workingExistingTags.any((t) =>
-              stBackfill.any((st) => t.name.toLowerCase() == st.toLowerCase()));
-          if (!alreadyHas) {
-            final tagId = await _findOrCreateTagPath(stBackfill, libraryId: input.resource.libraryId);
-            if (tagId != null) {
-              await _tagRepo.attachTagToResource(
-                input.resource.id,
-                tagId,
-                source: 'scraper:backfill:${scraper.id}',
-              );
-              addedTagIds.add(tagId);
-              backfilledSupertags.add(tagPathStr);
-              effectiveCtx.log('Two-tier pre-dispatch: backfilled supertag "$tagPathStr" via ${scraper.displayName}');
-
-              // Query newly attached tag to update working tags
-              final attachedTag = await (_db.select(_db.tags)..where((t) => t.id.equals(tagId))).getSingleOrNull();
-              if (attachedTag != null) {
-                workingExistingTags.add(attachedTag);
-              }
-            }
-          }
-        }
-      }
+    // --- Tier 1: persist the supertags the planner decided to backfill ---
+    for (final request in plan.backfill) {
+      final tagId = await _findOrCreateTagPath(request.tagPath, libraryId: subject.scopeId);
+      if (tagId == null) continue;
+      await _tagRepo.attachTagToResource(
+        subject.id,
+        tagId,
+        source: 'scraper:backfill:${request.scraperId}',
+      );
+      addedTagIds.add(tagId);
+      backfilledSupertags.add(request.label);
     }
 
-    // Refresh input with newly backfilled tags
-    currentInput = ScrapeInput(
-      resource: input.resource,
-      fileName: input.fileName,
-      sourceUrl: input.sourceUrl,
-      referrerUrl: input.referrerUrl,
-      existingFields: input.existingFields,
-      existingTags: workingExistingTags,
-    );
+    // --- Tier 2: apply proposed fields and tags in priority order ---
+    for (final run in plan.runs) {
+      final scraperId = run.scraper.id;
 
-    // --- Tier 2: Supertag Targeted & Specific Scrapers Dispatch ---
-    for (final scraper in orderedScrapers) {
-      if (!isScraperEnabled(scraper.id)) continue;
-      if (!scraper.canHandle(currentInput)) continue;
-
-      try {
-        effectiveCtx.log('Executing scraper: ${scraper.displayName}');
-        final result = await scraper.scrape(currentInput, effectiveCtx);
-        if (result.isEmpty) continue;
-
-        if (result.proposedTitle != null && bestTitle == null) {
-          bestTitle = result.proposedTitle;
-        }
-
-        if (result.previewImageUrl != null && bestPreviewImage == null) {
-          bestPreviewImage = result.previewImageUrl;
-        }
-
-        // Apply proposed fields respecting priority rules (Section 5.4)
-        for (final pf in result.fields) {
-          String? resolvedEntityId;
-          if (pf.entityName != null && pf.entityName!.trim().isNotEmpty) {
-            final entity = await _entityRepo.findOrCreateEntity(
-              pf.entityType ?? 'other',
-              pf.entityName!.trim(),
-            );
-            resolvedEntityId = entity.id;
-          }
-
-          final effectiveConfidence = getEffectiveConfidence(scraper.id, pf.key, pf.confidence);
-          final saved = await _fieldValueRepo.setAutomatedFieldValue(
-            resourceId: input.resource.id,
-            key: pf.key,
-            valueText: pf.valueText,
-            valueNum: pf.valueNum,
-            entityId: resolvedEntityId,
-            source: pf.source,
-            confidence: effectiveConfidence,
+      for (final pf in run.result.fields) {
+        String? resolvedEntityId;
+        if (pf.entityName != null && pf.entityName!.trim().isNotEmpty) {
+          final entity = await _entityRepo.findOrCreateEntity(
+            pf.entityType ?? 'other',
+            pf.entityName!.trim(),
           );
-          addedFields.add(saved);
+          resolvedEntityId = entity.id;
         }
 
-        // Apply proposed tags
-        for (final pt in result.tags) {
-          if (pt.tagPath.isEmpty) continue;
-          final tagId = await _findOrCreateTagPath(pt.tagPath, libraryId: input.resource.libraryId);
-          if (tagId != null) {
-            await _tagRepo.attachTagToResource(
-              input.resource.id,
-              tagId,
-              source: 'scraper:${scraper.id}',
-            );
-            addedTagIds.add(tagId);
-          }
+        final effectiveConfidence = getEffectiveConfidence(scraperId, pf.key, pf.confidence);
+        final saved = await _fieldValueRepo.setAutomatedFieldValue(
+          resourceId: subject.id,
+          key: pf.key,
+          valueText: pf.valueText,
+          valueNum: pf.valueNum,
+          entityId: resolvedEntityId,
+          source: pf.source,
+          confidence: effectiveConfidence,
+        );
+        addedFields.add(saved);
+      }
+
+      for (final pt in run.result.tags) {
+        if (pt.tagPath.isEmpty) continue;
+        final tagId = await _findOrCreateTagPath(pt.tagPath, libraryId: subject.scopeId);
+        if (tagId != null) {
+          await _tagRepo.attachTagToResource(
+            subject.id,
+            tagId,
+            source: 'scraper:$scraperId',
+          );
+          addedTagIds.add(tagId);
         }
-      } catch (e) {
-        effectiveCtx.log('Scraper ${scraper.id} failed: $e');
       }
     }
+
+    final bestTitle = plan.proposedTitle;
+    final bestPreviewImage = plan.previewImageUrl;
 
     // Update resource title if we obtained a valid proposed title
     if (bestTitle != null && bestTitle.trim().isNotEmpty) {
-      final curTitle = input.resource.title;
+      final curTitle = subject.title;
       // Only auto-update title if current title is default/empty or resembles raw filename
       if (curTitle == null ||
           curTitle.isEmpty ||
@@ -546,7 +497,7 @@ class ScraperRegistry {
           curTitle == input.fileName) {
         await _resourceRepo.updateResource(
           ResourcesCompanion(
-            id: Value(input.resource.id),
+            id: Value(subject.id),
             title: Value(bestTitle),
             updatedAt: Value(DateTime.now().toUtc().millisecondsSinceEpoch),
           ),
@@ -555,8 +506,8 @@ class ScraperRegistry {
     }
 
     // If resource has mediaType == 'other' or null, refine it if a known file extension is present
-    if (input.resource.mediaType == null || input.resource.mediaType == 'other') {
-      final checkPath = input.resource.uri ?? input.fileName;
+    if (subject.mediaType == null || subject.mediaType == 'other') {
+      final checkPath = subject.uri ?? input.fileName;
       if (checkPath != null && checkPath.isNotEmpty) {
         final uri = Uri.tryParse(checkPath);
         final pathToCheck = uri != null && uri.path.isNotEmpty ? uri.path : checkPath;
@@ -566,7 +517,7 @@ class ScraperRegistry {
           if (refinedType != 'other') {
             await _resourceRepo.updateResource(
               ResourcesCompanion(
-                id: Value(input.resource.id),
+                id: Value(subject.id),
                 mediaType: Value(refinedType),
                 mime: Value(refinedMime),
                 updatedAt: Value(DateTime.now().toUtc().millisecondsSinceEpoch),
@@ -596,16 +547,16 @@ class ScraperRegistry {
             final thumbService = _thumbnailService;
             if (thumbService != null) {
               await thumbService.saveRemoteCoverAsThumbnail(
-                input.resource.id,
+                subject.id,
                 response.bodyBytes,
               );
-              ThumbnailWidget.invalidateCache(input.resource.id);
-              debugPrint('ScraperRegistry: saved remote cover as thumbnail for ${input.resource.id}');
+              ThumbnailWidget.invalidateCache(subject.id);
+              debugPrint('ScraperRegistry: saved remote cover as thumbnail for ${subject.id}');
 
               // Bump resource updatedAt so listeners re-render with new thumbnail
               await _resourceRepo.updateResource(
                 ResourcesCompanion(
-                  id: Value(input.resource.id),
+                  id: Value(subject.id),
                   updatedAt: Value(DateTime.now().toUtc().millisecondsSinceEpoch),
                 ),
               );
@@ -630,6 +581,18 @@ class ScraperRegistry {
     );
   }
 
+  /// Planner built from the current registry state (no database access).
+  ScraperPlanner _planner() => ScraperPlanner(
+        scrapers: _scrapers,
+        settings: ScraperSettings(
+          disabledIds: {
+            for (final entry in _enabledStates.entries)
+              if (!entry.value) entry.key,
+          },
+          priorityOverrides: Map<String, int>.from(_customPriorities),
+        ),
+      );
+
   /// Convenience method to run scraper pipeline on an existing resource by its ID.
   Future<ScrapePipelineResult> scrapeResource(
     String resourceId, {
@@ -651,11 +614,11 @@ class ScraperRegistry {
         item.resource.uri;
 
     final input = ScrapeInput(
-      resource: item.resource,
+      subject: _subjectOf(item.resource),
       fileName: fileName,
       sourceUrl: sourceUrl,
-      existingFields: existingFieldsMap,
-      existingTags: item.tags,
+      existingTags: [for (final t in item.tags) ExistingTag(t.name)],
+      existingFields: _existingFieldsOf(existingFieldsMap),
     );
 
     return executePipeline(input, ctx: ctx);
@@ -685,32 +648,20 @@ class ScraperRegistry {
         item.resource.uri;
 
     final input = ScrapeInput(
-      resource: item.resource,
+      subject: _subjectOf(item.resource),
       fileName: fileName,
       sourceUrl: sourceUrl,
-      existingFields: existingFieldsMap,
-      existingTags: item.tags,
+      existingTags: [for (final t in item.tags) ExistingTag(t.name)],
+      existingFields: _existingFieldsOf(existingFieldsMap),
     );
 
     final effectiveCtx = ctx ?? ScrapeContext(config: _configs);
-    final results = <({Scraper scraper, ScrapeResult result})>[];
+    final plan = await _planner().plan(input, ctx: effectiveCtx, backfillSupertags: false);
 
-    final orderedScrapers = scrapers;
-    for (final scraper in orderedScrapers) {
-      if (!isScraperEnabled(scraper.id)) continue;
-      if (!scraper.canHandle(input)) continue;
-
-      try {
-        final res = await scraper.scrape(input, effectiveCtx);
-        if (!res.isEmpty) {
-          results.add((scraper: scraper, result: res));
-        }
-      } catch (e) {
-        effectiveCtx.log('inspectResourceScrape: Scraper ${scraper.id} failed: $e');
-      }
-    }
-
-    return (input: input, results: results);
+    return (
+      input: input,
+      results: [for (final run in plan.runs) (scraper: run.scraper, result: run.result)],
+    );
   }
 
   /// Applies user-verified fields, tags, and title from a resolved ScrapeResult.
@@ -729,7 +680,7 @@ class ScraperRegistry {
 
     // 1. Backfill Supertags
     for (final st in backfillSupertags) {
-      final tag = await _tagRepo.findOrCreateTag(st, libraryId: input.resource.libraryId);
+      final tag = await _tagRepo.findOrCreateTag(st, libraryId: input.subject.scopeId);
       await _tagRepo.attachTagToResource(resourceId, tag.id, source: 'manual_verify:${scraper.id}');
       addedTagIds.add(tag.id);
     }
@@ -774,7 +725,7 @@ class ScraperRegistry {
     // 3. Save selected tags
     for (final pt in selectedTags) {
       if (pt.tagPath.isEmpty) continue;
-      final tagId = await _findOrCreateTagPath(pt.tagPath, libraryId: input.resource.libraryId);
+      final tagId = await _findOrCreateTagPath(pt.tagPath, libraryId: input.subject.scopeId);
       if (tagId != null) {
         await _tagRepo.attachTagToResource(
           resourceId,
@@ -836,6 +787,24 @@ class ScraperRegistry {
     );
   }
 
+  /// Maps a drift row onto the app-agnostic subject the scraping layer expects.
+  ScrapeSubject _subjectOf(Resource resource) => ScrapeSubject(
+        id: resource.id,
+        title: resource.title,
+        uri: resource.uri,
+        mediaType: resource.mediaType,
+        scopeId: resource.libraryId,
+      );
+
+  /// Maps drift field rows onto the plain values scrapers can see.
+  Map<String, List<ExistingField>> _existingFieldsOf(Map<String, List<FieldValue>> rows) => {
+        for (final entry in rows.entries)
+          entry.key: [
+            for (final f in entry.value)
+              ExistingField(f.key, valueText: f.valueText, valueNum: f.valueNum),
+          ],
+      };
+
   Future<String?> _findOrCreateTagPath(List<String> path, {String? libraryId}) async {
     String? currentParentId;
     for (final seg in path) {
@@ -857,8 +826,9 @@ class ScraperRegistry {
 
 /// Provider for [ScraperRegistry].
 ///
-/// 默认插件目录：应用数据目录 `plugins/scrapers`（见 [YamlScraperLoader.inUserDir]），
-/// 不再依赖当前工作目录。构造时触发一次内置同步（含哈希升级规则）。
+/// 默认插件目录：应用数据目录 `plugins/scrapers`（见 [createScraperLoader]），
+/// 不再依赖当前工作目录。构造时触发一次内置同步（含哈希升级规则），
+/// 之后监听目录变化自动热重载。
 final scraperRegistryProvider = Provider<ScraperRegistry>((ref) {
   final db = ref.watch(appDatabaseProvider);
   final resourceRepo = ref.watch(resourceRepositoryProvider);
@@ -877,9 +847,16 @@ final scraperRegistryProvider = Provider<ScraperRegistry>((ref) {
   );
 
   // Asynchronously sync builtins, then load settings and yaml plugins
-  YamlScraperLoader.inUserDir().then((loader) {
+  createScraperLoader().then((loader) {
     registry.setYamlLoader(loader);
-    registry.loadSettings().then((_) => registry.loadYamlPlugins());
+    registry.loadSettings().then((_) async {
+      await registry.loadYamlPlugins();
+      registry.watchYamlPlugins();
+    });
+  });
+
+  ref.onDispose(() {
+    registry.dispose();
   });
 
   return registry;

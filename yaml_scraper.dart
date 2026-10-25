@@ -549,9 +549,9 @@ class YamlScraper implements Scraper {
   bool canHandle(ScrapeInput input) {
     // 0. Check media type restriction if specified
     if (_mediaTypes.isNotEmpty) {
-      var resType = input.resource.mediaType?.toLowerCase();
+      var resType = input.subject.mediaType?.toLowerCase();
       if (resType == null || resType.isEmpty || resType == MediaTypes.other) {
-        final checkPath = input.resource.uri ?? input.fileName ?? '';
+        final checkPath = input.subject.uri ?? input.fileName ?? '';
         if (checkPath.isNotEmpty) {
           resType = MediaTypes.detectMediaTypeFromExtension(checkPath);
         }
@@ -573,10 +573,10 @@ class YamlScraper implements Scraper {
     // 2. Check pattern regex against sourceUrl, uri, or fileName
     final pattern = _patternRegex;
     if (pattern != null) {
-      final url = input.sourceUrl ?? input.resource.uri ?? '';
+      final url = input.sourceUrl ?? input.subject.uri ?? '';
       if (url.isNotEmpty && pattern.hasMatch(url)) return true;
 
-      final fn = input.fileName ?? input.resource.title ?? '';
+      final fn = input.fileName ?? input.subject.title ?? '';
       if (fn.isNotEmpty && pattern.hasMatch(fn)) return true;
     }
 
@@ -586,8 +586,8 @@ class YamlScraper implements Scraper {
   @override
   Future<ScrapeResult> scrape(ScrapeInput input, ScrapeContext ctx) async {
     final client = ctx.client ?? _client ?? http.Client();
-    final url = input.sourceUrl ?? input.resource.uri ?? '';
-    final fn = input.fileName ?? input.resource.title ?? '';
+    final url = input.sourceUrl ?? input.subject.uri ?? '';
+    final fn = input.fileName ?? input.subject.title ?? '';
     final targetStr = url.isNotEmpty ? url : fn;
 
     // 1. Extract matches from pattern

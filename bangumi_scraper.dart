@@ -39,7 +39,7 @@ class BangumiScraper implements Scraper {
   @override
   bool canHandle(ScrapeInput input) {
     // 1. Matches Bangumi URL
-    final url = input.sourceUrl ?? input.resource.uri ?? '';
+    final url = input.sourceUrl ?? input.subject.uri ?? '';
     if (url.isNotEmpty && patternRegex!.hasMatch(url)) return true;
 
     // 2. Resource has matching Supertags
@@ -49,7 +49,7 @@ class BangumiScraper implements Scraper {
     }
 
     // 3. Filename indicates anime episode pattern (e.g. [Nekomoe] Frieren - 01 [1080p].mp4)
-    final fn = input.fileName ?? input.resource.title ?? '';
+    final fn = input.fileName ?? input.subject.title ?? '';
     return fn.toLowerCase().contains('bangumi') ||
         RegExp(r'\[(?:bangumi|bgm)[:\-](\d+)\]', caseSensitive: false).hasMatch(fn) ||
         RegExp(r'\[[a-zA-Z0-9_\u4e00-\u9fa5]+\]\s*([^-\[]+)\s*-\s*\d{1,3}', caseSensitive: false).hasMatch(fn);
@@ -58,14 +58,14 @@ class BangumiScraper implements Scraper {
   @override
   Future<ScrapeResult> scrape(ScrapeInput input, ScrapeContext ctx) async {
     final client = ctx.client ?? _client ?? http.Client();
-    final url = input.sourceUrl ?? input.resource.uri ?? '';
+    final url = input.sourceUrl ?? input.subject.uri ?? '';
 
     String? subjectId;
     final urlMatch = patternRegex?.firstMatch(url);
     if (urlMatch != null) {
       subjectId = urlMatch.group(1);
     } else {
-      final fn = input.fileName ?? input.resource.title ?? '';
+      final fn = input.fileName ?? input.subject.title ?? '';
       final bgmMatch = RegExp(r'\[(?:bangumi|bgm)[:\-](\d+)\]', caseSensitive: false).firstMatch(fn);
       if (bgmMatch != null) {
         subjectId = bgmMatch.group(1);
@@ -95,7 +95,7 @@ class BangumiScraper implements Scraper {
     }
 
     // Parse from anime filename pattern (e.g. "[Sub] Bocchi the Rock! - 01 [1080p]")
-    final fn = input.fileName ?? input.resource.title ?? '';
+    final fn = input.fileName ?? input.subject.title ?? '';
     final episodeMatch = RegExp(r'\[[^\]]+\]\s*([^-\[]+)\s*-\s*(\d{1,3})', caseSensitive: false).firstMatch(fn);
     if (episodeMatch != null) {
       final animeTitle = episodeMatch.group(1)!.trim();

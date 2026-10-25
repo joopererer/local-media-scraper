@@ -199,8 +199,8 @@ class WebPageScraper implements Scraper {
     if (input.sourceUrl != null && input.sourceUrl!.isNotEmpty) {
       return input.sourceUrl;
     }
-    if (input.resource.uri != null && input.resource.uri!.isNotEmpty) {
-      return input.resource.uri;
+    if (input.subject.uri != null && input.subject.uri!.isNotEmpty) {
+      return input.subject.uri;
     }
     return null;
   }

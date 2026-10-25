@@ -29,13 +29,13 @@ class FileNameScraper implements Scraper {
 
   @override
   bool canHandle(ScrapeInput input) {
-    final name = input.fileName ?? input.resource.title;
+    final name = input.fileName ?? input.subject.title;
     return name != null && name.trim().isNotEmpty;
   }
 
   @override
   Future<ScrapeResult> scrape(ScrapeInput input, ScrapeContext ctx) async {
-    final rawName = input.fileName ?? input.resource.title ?? '';
+    final rawName = input.fileName ?? input.subject.title ?? '';
     final stem = p.basenameWithoutExtension(rawName).trim();
     if (stem.isEmpty) {
       return const ScrapeResult();

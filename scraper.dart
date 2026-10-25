@@ -1,23 +1,63 @@
 import 'package:http/http.dart' as http;
 
-import '../../data/db/app_database.dart';
+/// The thing being scraped, expressed without any application/database types.
+///
+/// Scrapers only ever read these fields, so this type keeps the scraping layer
+/// free of drift rows (and reusable outside this app).
+class ScrapeSubject {
+  final String id;
+  final String? title;
+  final String? uri;
+  final String? mediaType;
+
+  /// Opaque scope id (today: the library id) used by callers when writing tags.
+  /// Scrapers never interpret it.
+  final String? scopeId;
+
+  const ScrapeSubject({
+    required this.id,
+    this.title,
+    this.uri,
+    this.mediaType,
+    this.scopeId,
+  });
+}
+
+/// A tag already attached to the subject (scrapers only match on the name).
+class ExistingTag {
+  final String name;
+
+  const ExistingTag(this.name);
+}
+
+/// A field value already stored on the subject.
+///
+/// Bundled scrapers do not read this, but it is part of the contract so a
+/// third-party scraper can avoid proposing a value that already exists.
+class ExistingField {
+  final String key;
+  final String? valueText;
+  final double? valueNum;
+
+  const ExistingField(this.key, {this.valueText, this.valueNum});
+}
 
 /// Input provided to a [Scraper].
 class ScrapeInput {
-  final Resource resource;
+  final ScrapeSubject subject;
   final String? fileName;
   final String? sourceUrl;
   final String? referrerUrl;
-  final Map<String, List<FieldValue>> existingFields;
-  final List<Tag> existingTags;
+  final List<ExistingTag> existingTags;
+  final Map<String, List<ExistingField>> existingFields;
 
   const ScrapeInput({
-    required this.resource,
+    required this.subject,
     this.fileName,
     this.sourceUrl,
     this.referrerUrl,
-    this.existingFields = const {},
     this.existingTags = const [],
+    this.existingFields = const {},
   });
 
   Set<String> get existingTagNames =>

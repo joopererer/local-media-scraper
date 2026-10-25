@@ -38,7 +38,7 @@ class DoubanScraper implements Scraper {
   @override
   bool canHandle(ScrapeInput input) {
     // 1. Matches Douban URL
-    final url = input.sourceUrl ?? input.resource.uri ?? '';
+    final url = input.sourceUrl ?? input.subject.uri ?? '';
     if (url.isNotEmpty && patternRegex!.hasMatch(url)) return true;
 
     // 2. Resource has matching Supertags
@@ -48,21 +48,21 @@ class DoubanScraper implements Scraper {
     }
 
     // 3. Filename or title contains 'douban' or a douban ID tag
-    final fn = input.fileName ?? input.resource.title ?? '';
+    final fn = input.fileName ?? input.subject.title ?? '';
     return fn.toLowerCase().contains('douban') || RegExp(r'\[(?:douban|db)[:\-](\d+)\]', caseSensitive: false).hasMatch(fn);
   }
 
   @override
   Future<ScrapeResult> scrape(ScrapeInput input, ScrapeContext ctx) async {
     final client = ctx.client ?? _client ?? http.Client();
-    final url = input.sourceUrl ?? input.resource.uri ?? '';
+    final url = input.sourceUrl ?? input.subject.uri ?? '';
 
     String? subjectId;
     final urlMatch = patternRegex?.firstMatch(url);
     if (urlMatch != null) {
       subjectId = urlMatch.group(1);
     } else {
-      final fn = input.fileName ?? input.resource.title ?? '';
+      final fn = input.fileName ?? input.subject.title ?? '';
       final dbIdMatch = RegExp(r'\[(?:douban|db)[:\-](\d+)\]', caseSensitive: false).firstMatch(fn);
       if (dbIdMatch != null) {
         subjectId = dbIdMatch.group(1);
@@ -90,7 +90,7 @@ class DoubanScraper implements Scraper {
     }
 
     // Heuristic fallback from filename
-    final fn = input.fileName ?? input.resource.title ?? '';
+    final fn = input.fileName ?? input.subject.title ?? '';
     final clean = fn.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '').trim();
     if (clean.isNotEmpty) {
       return ScrapeResult(

@@ -39,7 +39,7 @@ class TmdbScraper implements Scraper {
   @override
   bool canHandle(ScrapeInput input) {
     // 1. Matches URL with themoviedb.org
-    final url = input.sourceUrl ?? input.resource.uri ?? '';
+    final url = input.sourceUrl ?? input.subject.uri ?? '';
     if (url.isNotEmpty && patternRegex!.hasMatch(url)) return true;
 
     // 2. Resource has matching Supertags
@@ -49,7 +49,7 @@ class TmdbScraper implements Scraper {
     }
 
     // 3. Filename indicates a movie with a 4-digit release year (e.g. Inception.2010.1080p.mkv)
-    final fn = input.fileName ?? input.resource.title ?? '';
+    final fn = input.fileName ?? input.subject.title ?? '';
     final movieYearMatch = RegExp(r'^(.*?)[\.\s\(\[]((?:19|20)\d{2})[\.\s\)\]]').firstMatch(fn);
     return movieYearMatch != null;
   }
@@ -60,7 +60,7 @@ class TmdbScraper implements Scraper {
     final apiKey = ctx.getConfig('tmdb_api_key');
 
     // 1. Check if URL directly points to TMDB movie or tv
-    final url = input.sourceUrl ?? input.resource.uri ?? '';
+    final url = input.sourceUrl ?? input.subject.uri ?? '';
     final urlMatch = patternRegex?.firstMatch(url);
     if (urlMatch != null && apiKey != null && apiKey.isNotEmpty) {
       final type = urlMatch.group(1); // 'movie' or 'tv'
@@ -80,7 +80,7 @@ class TmdbScraper implements Scraper {
     }
 
     // 2. Parse from movie title and release year pattern
-    final fn = input.fileName ?? input.resource.title ?? '';
+    final fn = input.fileName ?? input.subject.title ?? '';
     final movieYearMatch = RegExp(r'^(.*?)[\.\s\(\[]((?:19|20)\d{2})[\.\s\)\]]').firstMatch(fn);
     if (movieYearMatch != null) {
       final cleanTitle = movieYearMatch.group(1)!.replaceAll('.', ' ').trim();
