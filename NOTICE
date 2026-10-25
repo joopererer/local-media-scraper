@@ -1,0 +1,21 @@
+# NOTICE
+
+local-media-scraper
+Copyright 2026 Jiawei LI
+Licensed under the Apache License, Version 2.0.
+
+This project was extracted from the File Organizer project
+(https://github.com/joopererer/file_organizer), also Apache-2.0 and
+Copyright 2026 Jiawei LI. Git history is preserved so the provenance of each
+change stays visible.
+
+Bundled Dart sources (the `scraper_core` library) contain no third-party code.
+Runtime dependencies are fetched from pub.dev under their own licenses:
+
+- `http` (BSD-3-Clause)
+- `yaml` (MIT)
+- `path` (BSD-3-Clause)
+
+No site-specific plugin files are distributed with this package; plugins are
+supplied by the host application or the user.
+

@@ -1,5 +1,5 @@
-import '../../core/media_types.dart';
-import 'scraper.dart';
+import '../media_type.dart';
+import '../scraper.dart';
 
 /// Runtime settings that influence dispatch, supplied by the caller.
 ///
@@ -15,7 +15,8 @@ class ScraperSettings {
 
   bool isEnabled(String id) => !disabledIds.contains(id);
 
-  int priorityOf(Scraper scraper) => priorityOverrides[scraper.id] ?? scraper.priority;
+  int priorityOf(Scraper scraper) =>
+      priorityOverrides[scraper.id] ?? scraper.priority;
 }
 
 /// A supertag that tier 1 decided to backfill, with the scraper that triggered it.
@@ -66,12 +67,17 @@ class ScraperPlanner {
   final List<Scraper> scrapers;
   final ScraperSettings settings;
 
-  const ScraperPlanner({required this.scrapers, this.settings = const ScraperSettings()});
+  const ScraperPlanner({
+    required this.scrapers,
+    this.settings = const ScraperSettings(),
+  });
 
   /// Registered scrapers sorted by effective priority descending.
   List<Scraper> orderedScrapers() {
     final list = List<Scraper>.from(scrapers);
-    list.sort((a, b) => settings.priorityOf(b).compareTo(settings.priorityOf(a)));
+    list.sort(
+      (a, b) => settings.priorityOf(b).compareTo(settings.priorityOf(a)),
+    );
     return list;
   }
 
@@ -85,12 +91,15 @@ class ScraperPlanner {
     final effectiveCtx = ctx ?? const ScrapeContext();
     final ordered = orderedScrapers();
     final backfill = <BackfillRequest>[];
-    final virtualTagNames = <String>{for (final t in input.existingTags) t.name};
+    final virtualTagNames = <String>{
+      for (final t in input.existingTags) t.name,
+    };
 
     // --- Tier 1: feature rule pre-dispatch & supertag backfilling ---
     if (backfillSupertags) {
       final targetStr =
-          '${input.fileName ?? ''} ${input.sourceUrl ?? ''} ${input.subject.title ?? ''}'.trim();
+          '${input.fileName ?? ''} ${input.sourceUrl ?? ''} ${input.subject.title ?? ''}'
+              .trim();
 
       for (final scraper in ordered) {
         if (!settings.isEnabled(scraper.id)) continue;
@@ -103,11 +112,15 @@ class ScraperPlanner {
         if (stBackfill == null || stBackfill.isEmpty) continue;
 
         final alreadyHas = virtualTagNames.any(
-          (name) => stBackfill.any((st) => name.toLowerCase() == st.toLowerCase()),
+          (name) =>
+              stBackfill.any((st) => name.toLowerCase() == st.toLowerCase()),
         );
         if (alreadyHas) continue;
 
-        final request = BackfillRequest(tagPath: List<String>.from(stBackfill), scraperId: scraper.id);
+        final request = BackfillRequest(
+          tagPath: List<String>.from(stBackfill),
+          scraperId: scraper.id,
+        );
         backfill.add(request);
         virtualTagNames.add(stBackfill.last);
         effectiveCtx.log(
@@ -124,7 +137,9 @@ class ScraperPlanner {
             fileName: input.fileName,
             sourceUrl: input.sourceUrl,
             referrerUrl: input.referrerUrl,
-            existingTags: [for (final name in virtualTagNames) ExistingTag(name)],
+            existingTags: [
+              for (final name in virtualTagNames) ExistingTag(name),
+            ],
             existingFields: input.existingFields,
           );
 
@@ -162,21 +177,21 @@ class ScraperPlanner {
     if (scraper.mediaTypes.isEmpty) return true;
 
     var resType = input.subject.mediaType?.toLowerCase();
-    if (resType == null || resType.isEmpty || resType == MediaTypes.other) {
+    if (resType == null || resType.isEmpty || resType == MediaKind.other) {
       final checkPath = input.subject.uri ?? input.fileName ?? '';
       if (checkPath.isNotEmpty) {
-        resType = MediaTypes.detectMediaTypeFromExtension(checkPath);
+        resType = MediaKind.fromExtension(checkPath);
       }
     }
     if (resType != null &&
         resType.isNotEmpty &&
-        resType != MediaTypes.other &&
+        resType != MediaKind.other &&
         !scraper.mediaTypes.contains(resType)) {
       return false;
     }
     if (scraper.mediaTypes.length == 1 &&
-        scraper.mediaTypes.first == MediaTypes.video &&
-        resType != MediaTypes.video) {
+        scraper.mediaTypes.first == MediaKind.video &&
+        resType != MediaKind.video) {
       return false;
     }
     return true;

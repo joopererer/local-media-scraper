@@ -1,5 +1,5 @@
 import 'package:path/path.dart' as p;
-import 'scraper.dart';
+import '../scraper.dart';
 
 /// Scrapes metadata (code, year, episode, tags, studio, clean title) from filename patterns.
 class FileNameScraper implements Scraper {
@@ -10,7 +10,7 @@ class FileNameScraper implements Scraper {
   String get displayName => '文件名正则识别器';
 
   @override
-  String get description => '从文件名中自动识别番号、年份、集数、括号标签及制作社';
+  String get description => '从文件名中自动识别产品编号、年份、集数、括号标签及制作社';
 
   @override
   int get priority => 20;
@@ -56,7 +56,10 @@ class FileNameScraper implements Scraper {
       if (content.isEmpty) continue;
 
       // If it's the very first token at the beginning of filename, consider it Studio/Author
-      if (i == 0 && match.start == 0 && !content.contains(',') && !content.contains('、')) {
+      if (i == 0 &&
+          match.start == 0 &&
+          !content.contains(',') &&
+          !content.contains('、')) {
         fields.add(
           ProposedField(
             key: 'studio',
@@ -68,7 +71,9 @@ class FileNameScraper implements Scraper {
         );
       } else {
         // Split multiple tags inside brackets: [tag1, tag2] or [tag1/tag2]
-        final subTags = content.split(RegExp(r'[,/、\s]+')).where((s) => s.isNotEmpty);
+        final subTags = content
+            .split(RegExp(r'[,/、\s]+'))
+            .where((s) => s.isNotEmpty);
         for (final t in subTags) {
           // Avoid treating pure resolution like 1080p, 4k or video codec x264 as user tag
           if (_isTechnicalTag(t)) {
@@ -81,12 +86,7 @@ class FileNameScraper implements Scraper {
               ),
             );
           } else {
-            tags.add(
-              ProposedTag(
-                tagPath: [t],
-                confidence: 0.8,
-              ),
-            );
+            tags.add(ProposedTag(tagPath: [t], confidence: 0.8));
           }
         }
       }
@@ -95,8 +95,11 @@ class FileNameScraper implements Scraper {
     // Remove bracket matches from working title
     workingTitle = workingTitle.replaceAll(bracketRegex, ' ').trim();
 
-    // 2. Extract番号 / Product Code (e.g. ABC-123, FC2-PPV-123456)
-    final codeRegex = RegExp(r'\b([A-Za-z]{2,8}-\d{2,6})\b', caseSensitive: false);
+    // 2. Extract product code (e.g. ABC-123, FC2-PPV-123456)
+    final codeRegex = RegExp(
+      r'\b([A-Za-z]{2,8}-\d{2,6})\b',
+      caseSensitive: false,
+    );
     final codeMatch = codeRegex.firstMatch(workingTitle);
     if (codeMatch != null) {
       final code = codeMatch.group(1)!.toUpperCase();
@@ -113,7 +116,10 @@ class FileNameScraper implements Scraper {
     }
 
     // 3. Extract Season / Episode (e.g. S01E05, EP03)
-    final epRegex = RegExp(r'\b(S\d{1,2}E\d{1,2}|EP\d{1,4})\b', caseSensitive: false);
+    final epRegex = RegExp(
+      r'\b(S\d{1,2}E\d{1,2}|EP\d{1,4})\b',
+      caseSensitive: false,
+    );
     final epMatch = epRegex.firstMatch(workingTitle);
     if (epMatch != null) {
       final ep = epMatch.group(1)!.toUpperCase();
@@ -170,9 +176,24 @@ class FileNameScraper implements Scraper {
   bool _isTechnicalTag(String token) {
     final lower = token.toLowerCase();
     const technical = {
-      '1080p', '720p', '4k', '2k', '2160p', '480p',
-      'x264', 'x265', 'h264', 'hevc', 'av1', 'aac',
-      'mp4', 'mkv', 'flac', 'bdrip', 'web-dl', 'webrip',
+      '1080p',
+      '720p',
+      '4k',
+      '2k',
+      '2160p',
+      '480p',
+      'x264',
+      'x265',
+      'h264',
+      'hevc',
+      'av1',
+      'aac',
+      'mp4',
+      'mkv',
+      'flac',
+      'bdrip',
+      'web-dl',
+      'webrip',
     };
     return technical.contains(lower);
   }

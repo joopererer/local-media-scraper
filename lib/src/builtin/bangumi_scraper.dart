@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-import 'scraper.dart';
+import '../scraper.dart';
 
 /// Scraper for Bangumi (番组计划, bgm.tv) anime, manga, and game metadata.
 class BangumiScraper implements Scraper {
@@ -25,13 +25,18 @@ class BangumiScraper implements Scraper {
   List<String> get mediaTypes => const [];
 
   @override
-  List<String> get targetSupertags => const ['番剧', 'Anime', '动画', '漫画', 'Manga', 'ACG']; // i18n:ignore 数据库标识符
+  List<String> get targetSupertags => const [
+    '番剧',
+    'Anime',
+    '动画',
+    '漫画',
+    'Manga',
+    'ACG',
+  ]; // i18n:ignore 数据库标识符
 
   @override
-  RegExp? get patternRegex => RegExp(
-        r'(?:bgm\.tv|bangumi\.tv)/subject/(\d+)',
-        caseSensitive: false,
-      );
+  RegExp? get patternRegex =>
+      RegExp(r'(?:bgm\.tv|bangumi\.tv)/subject/(\d+)', caseSensitive: false);
 
   @override
   List<String>? get supertagToBackfill => const ['番剧']; // i18n:ignore 数据库标识符
@@ -51,8 +56,14 @@ class BangumiScraper implements Scraper {
     // 3. Filename indicates anime episode pattern (e.g. [Nekomoe] Frieren - 01 [1080p].mp4)
     final fn = input.fileName ?? input.subject.title ?? '';
     return fn.toLowerCase().contains('bangumi') ||
-        RegExp(r'\[(?:bangumi|bgm)[:\-](\d+)\]', caseSensitive: false).hasMatch(fn) ||
-        RegExp(r'\[[a-zA-Z0-9_\u4e00-\u9fa5]+\]\s*([^-\[]+)\s*-\s*\d{1,3}', caseSensitive: false).hasMatch(fn);
+        RegExp(
+          r'\[(?:bangumi|bgm)[:\-](\d+)\]',
+          caseSensitive: false,
+        ).hasMatch(fn) ||
+        RegExp(
+          r'\[[a-zA-Z0-9_\u4e00-\u9fa5]+\]\s*([^-\[]+)\s*-\s*\d{1,3}',
+          caseSensitive: false,
+        ).hasMatch(fn);
   }
 
   @override
@@ -66,7 +77,10 @@ class BangumiScraper implements Scraper {
       subjectId = urlMatch.group(1);
     } else {
       final fn = input.fileName ?? input.subject.title ?? '';
-      final bgmMatch = RegExp(r'\[(?:bangumi|bgm)[:\-](\d+)\]', caseSensitive: false).firstMatch(fn);
+      final bgmMatch = RegExp(
+        r'\[(?:bangumi|bgm)[:\-](\d+)\]',
+        caseSensitive: false,
+      ).firstMatch(fn);
       if (bgmMatch != null) {
         subjectId = bgmMatch.group(1);
       }
@@ -77,16 +91,19 @@ class BangumiScraper implements Scraper {
       final apiUrl = 'https://api.bgm.tv/v0/subjects/$subjectId';
       try {
         ctx.log('Bangumi: fetching API for subject $subjectId');
-        final resp = await client.get(
-          Uri.parse(apiUrl),
-          headers: {
-            'User-Agent': 'FileOrganizer/2.0 (desktop app)',
-            'Accept': 'application/json',
-          },
-        ).timeout(const Duration(seconds: 10));
+        final resp = await client
+            .get(
+              Uri.parse(apiUrl),
+              headers: {
+                'User-Agent': 'FileOrganizer/2.0 (desktop app)',
+                'Accept': 'application/json',
+              },
+            )
+            .timeout(const Duration(seconds: 10));
 
         if (resp.statusCode == 200) {
-          final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+          final data =
+              jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
           return parseBangumiJson(data);
         }
       } catch (e) {
@@ -96,7 +113,10 @@ class BangumiScraper implements Scraper {
 
     // Parse from anime filename pattern (e.g. "[Sub] Bocchi the Rock! - 01 [1080p]")
     final fn = input.fileName ?? input.subject.title ?? '';
-    final episodeMatch = RegExp(r'\[[^\]]+\]\s*([^-\[]+)\s*-\s*(\d{1,3})', caseSensitive: false).firstMatch(fn);
+    final episodeMatch = RegExp(
+      r'\[[^\]]+\]\s*([^-\[]+)\s*-\s*(\d{1,3})',
+      caseSensitive: false,
+    ).firstMatch(fn);
     if (episodeMatch != null) {
       final animeTitle = episodeMatch.group(1)!.trim();
       final epNum = episodeMatch.group(2)!.trim();
@@ -121,7 +141,10 @@ class BangumiScraper implements Scraper {
           ),
         ],
         tags: const [
-          ProposedTag(tagPath: ['ACG', '番剧'], confidence: 0.95), // i18n:ignore 数据库标识符
+          ProposedTag(
+            tagPath: ['ACG', '番剧'],
+            confidence: 0.95,
+          ), // i18n:ignore 数据库标识符
         ],
       );
     }
@@ -136,52 +159,66 @@ class BangumiScraper implements Scraper {
     final date = data['date'] as String?;
     final score = (data['rating'] as Map<String, dynamic>?)?['score'] as num?;
     final images = data['images'] as Map<String, dynamic>?;
-    final String? coverUrl = (images?['large'] as String?) ?? (images?['common'] as String?);
+    final String? coverUrl =
+        (images?['large'] as String?) ?? (images?['common'] as String?);
 
     final fields = <ProposedField>[];
 
-    final effectiveTitle = (nameCn != null && nameCn.isNotEmpty) ? nameCn : name;
+    final effectiveTitle = (nameCn != null && nameCn.isNotEmpty)
+        ? nameCn
+        : name;
 
     if (name != null && name.isNotEmpty) {
-      fields.add(ProposedField(
-        key: 'japanese_title',
-        valueText: name,
-        source: 'scraper:bangumi',
-        confidence: 1.0,
-      ));
+      fields.add(
+        ProposedField(
+          key: 'japanese_title',
+          valueText: name,
+          source: 'scraper:bangumi',
+          confidence: 1.0,
+        ),
+      );
     }
 
     if (date != null && date.isNotEmpty) {
-      fields.add(ProposedField(
-        key: 'air_date',
-        valueText: date,
-        source: 'scraper:bangumi',
-        confidence: 0.95,
-      ));
+      fields.add(
+        ProposedField(
+          key: 'air_date',
+          valueText: date,
+          source: 'scraper:bangumi',
+          confidence: 0.95,
+        ),
+      );
     }
 
     if (score != null && score > 0) {
-      fields.add(ProposedField(
-        key: 'bangumi_rating',
-        valueNum: score.toDouble(),
-        valueText: score.toStringAsFixed(1),
-        source: 'scraper:bangumi',
-        confidence: 0.95,
-      ));
+      fields.add(
+        ProposedField(
+          key: 'bangumi_rating',
+          valueNum: score.toDouble(),
+          valueText: score.toStringAsFixed(1),
+          source: 'scraper:bangumi',
+          confidence: 0.95,
+        ),
+      );
     }
 
     if (summary != null && summary.trim().isNotEmpty) {
-      fields.add(ProposedField(
-        key: 'summary',
-        valueText: summary.trim(),
-        source: 'scraper:bangumi',
-        confidence: 0.90,
-      ));
+      fields.add(
+        ProposedField(
+          key: 'summary',
+          valueText: summary.trim(),
+          source: 'scraper:bangumi',
+          confidence: 0.90,
+        ),
+      );
     }
 
     // Tags
     final tags = <ProposedTag>[
-      const ProposedTag(tagPath: ['ACG', '番剧'], confidence: 0.95), // i18n:ignore 数据库标识符
+      const ProposedTag(
+        tagPath: ['ACG', '番剧'],
+        confidence: 0.95,
+      ), // i18n:ignore 数据库标识符
     ];
     final tagList = data['tags'] as List<dynamic>? ?? const [];
     for (final t in tagList.take(5)) {

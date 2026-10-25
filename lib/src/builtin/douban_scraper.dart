@@ -1,6 +1,6 @@
 import 'package:http/http.dart' as http;
 
-import 'scraper.dart';
+import '../scraper.dart';
 
 /// Scraper for Douban (豆瓣) Movie, Book, and Music metadata.
 class DoubanScraper implements Scraper {
@@ -27,10 +27,8 @@ class DoubanScraper implements Scraper {
   List<String> get targetSupertags => const ['电影', 'Movie', '图书', '书籍', 'Book']; // i18n:ignore 数据库标识符
 
   @override
-  RegExp? get patternRegex => RegExp(
-        r'douban\.com/subject/(\d+)',
-        caseSensitive: false,
-      );
+  RegExp? get patternRegex =>
+      RegExp(r'douban\.com/subject/(\d+)', caseSensitive: false);
 
   @override
   List<String>? get supertagToBackfill => const ['电影']; // i18n:ignore 数据库标识符
@@ -49,7 +47,11 @@ class DoubanScraper implements Scraper {
 
     // 3. Filename or title contains 'douban' or a douban ID tag
     final fn = input.fileName ?? input.subject.title ?? '';
-    return fn.toLowerCase().contains('douban') || RegExp(r'\[(?:douban|db)[:\-](\d+)\]', caseSensitive: false).hasMatch(fn);
+    return fn.toLowerCase().contains('douban') ||
+        RegExp(
+          r'\[(?:douban|db)[:\-](\d+)\]',
+          caseSensitive: false,
+        ).hasMatch(fn);
   }
 
   @override
@@ -63,7 +65,10 @@ class DoubanScraper implements Scraper {
       subjectId = urlMatch.group(1);
     } else {
       final fn = input.fileName ?? input.subject.title ?? '';
-      final dbIdMatch = RegExp(r'\[(?:douban|db)[:\-](\d+)\]', caseSensitive: false).firstMatch(fn);
+      final dbIdMatch = RegExp(
+        r'\[(?:douban|db)[:\-](\d+)\]',
+        caseSensitive: false,
+      ).firstMatch(fn);
       if (dbIdMatch != null) {
         subjectId = dbIdMatch.group(1);
       }
@@ -73,13 +78,15 @@ class DoubanScraper implements Scraper {
       final targetUrl = 'https://movie.douban.com/subject/$subjectId/';
       try {
         ctx.log('Douban: fetching subject $subjectId');
-        final resp = await client.get(
-          Uri.parse(targetUrl),
-          headers: {
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          },
-        ).timeout(const Duration(seconds: 10));
+        final resp = await client
+            .get(
+              Uri.parse(targetUrl),
+              headers: {
+                'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              },
+            )
+            .timeout(const Duration(seconds: 10));
 
         if (resp.statusCode == 200) {
           return parseDoubanHtml(resp.body, subjectId: subjectId);
@@ -107,14 +114,18 @@ class DoubanScraper implements Scraper {
   ScrapeResult parseDoubanHtml(String html, {required String subjectId}) {
     // 1. Title
     String? title;
-    final titleMatch = RegExp(r'<span property="v:itemreviewed">(.*?)</span>').firstMatch(html);
+    final titleMatch = RegExp(
+      r'<span property="v:itemreviewed">(.*?)</span>',
+    ).firstMatch(html);
     if (titleMatch != null) {
       title = titleMatch.group(1)!.trim();
     }
 
     // 2. Rating
     double? rating;
-    final ratingMatch = RegExp(r'<strong class="ll rating_num" property="v:average">(.*?)</strong>').firstMatch(html);
+    final ratingMatch = RegExp(
+      r'<strong class="ll rating_num" property="v:average">(.*?)</strong>',
+    ).firstMatch(html);
     if (ratingMatch != null) {
       rating = double.tryParse(ratingMatch.group(1)!.trim());
     }
@@ -128,21 +139,31 @@ class DoubanScraper implements Scraper {
 
     // 4. Summary
     String? summary;
-    final summaryMatch = RegExp(r'<span property="v:summary"[^>]*>([\s\S]*?)</span>').firstMatch(html);
+    final summaryMatch = RegExp(
+      r'<span property="v:summary"[^>]*>([\s\S]*?)</span>',
+    ).firstMatch(html);
     if (summaryMatch != null) {
-      summary = summaryMatch.group(1)!.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll('&nbsp;', ' ').trim();
+      summary = summaryMatch
+          .group(1)!
+          .replaceAll(RegExp(r'<[^>]*>'), '')
+          .replaceAll('&nbsp;', ' ')
+          .trim();
     }
 
     // 5. Poster image
     String? posterUrl;
-    final posterMatch = RegExp(r'<img src="(https://[^"]+doubanio\.com/[^"]+)" title="点击看更多海报"').firstMatch(html);
+    final posterMatch = RegExp(
+      r'<img src="(https://[^"]+doubanio\.com/[^"]+)" title="点击看更多海报"',
+    ).firstMatch(html);
     if (posterMatch != null) {
       posterUrl = posterMatch.group(1);
     }
 
     // 6. Genres
     final genres = <String>[];
-    final genreMatches = RegExp(r'<span property="v:genre">(.*?)</span>').allMatches(html);
+    final genreMatches = RegExp(
+      r'<span property="v:genre">(.*?)</span>',
+    ).allMatches(html);
     for (final m in genreMatches) {
       genres.add(m.group(1)!.trim());
     }
@@ -157,40 +178,48 @@ class DoubanScraper implements Scraper {
     ];
 
     if (director != null) {
-      fields.add(ProposedField(
-        key: 'director',
-        valueText: director,
-        entityName: director,
-        entityType: 'director',
-        source: 'scraper:douban',
-        confidence: 0.95,
-      ));
+      fields.add(
+        ProposedField(
+          key: 'director',
+          valueText: director,
+          entityName: director,
+          entityType: 'director',
+          source: 'scraper:douban',
+          confidence: 0.95,
+        ),
+      );
     }
 
     if (rating != null && rating > 0) {
-      fields.add(ProposedField(
-        key: 'douban_rating',
-        valueNum: rating,
-        valueText: rating.toStringAsFixed(1),
-        source: 'scraper:douban',
-        confidence: 0.95,
-      ));
+      fields.add(
+        ProposedField(
+          key: 'douban_rating',
+          valueNum: rating,
+          valueText: rating.toStringAsFixed(1),
+          source: 'scraper:douban',
+          confidence: 0.95,
+        ),
+      );
     }
 
     if (summary != null && summary.isNotEmpty) {
-      fields.add(ProposedField(
-        key: 'summary',
-        valueText: summary,
-        source: 'scraper:douban',
-        confidence: 0.90,
-      ));
+      fields.add(
+        ProposedField(
+          key: 'summary',
+          valueText: summary,
+          source: 'scraper:douban',
+          confidence: 0.90,
+        ),
+      );
     }
 
     final tags = <ProposedTag>[
       const ProposedTag(tagPath: ['影视'], confidence: 0.9), // i18n:ignore 数据库标识符
     ];
     for (final g in genres) {
-      tags.add(ProposedTag(tagPath: ['影视', g], confidence: 0.9)); // i18n:ignore 数据库标识符
+      tags.add(
+        ProposedTag(tagPath: ['影视', g], confidence: 0.9),
+      ); // i18n:ignore 数据库标识符
     }
 
     return ScrapeResult(

@@ -110,7 +110,7 @@ class ProposedTag {
   final List<String> tagPath;
   final double confidence;
 
-  /// Optional un-interpolated template rule (e.g. `'JAV / 片商 / {studio}'`).
+  /// Optional un-interpolated template rule (e.g. `'影视 / 片商 / {studio}'`).
   final String? rawTemplate;
 
   const ProposedTag({
@@ -179,11 +179,7 @@ class ScrapeContext {
   final Map<String, dynamic> config;
   final http.Client? client;
 
-  const ScrapeContext({
-    this.onLog,
-    this.config = const {},
-    this.client,
-  });
+  const ScrapeContext({this.onLog, this.config = const {}, this.client});
 
   void log(String message) => onLog?.call(message);
 
@@ -213,7 +209,7 @@ abstract class Scraper {
   RegExp? get patternRegex => null;
 
   /// If this scraper matches by [patternRegex], optionally backfill this supertag/tag
-  /// to the resource (e.g. `['影视', '电影']` or `['番号', 'AV']`).
+  /// to the resource (e.g. `['影视', '电影']`).
   List<String>? get supertagToBackfill => null;
 
   /// Whether this scraper can handle the provided input.

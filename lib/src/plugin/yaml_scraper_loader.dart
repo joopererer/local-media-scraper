@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
-import 'yaml_scraper.dart';
+import '../yaml/yaml_scraper.dart';
 
 /// Copies/refreshes built-in plugins before a scan.
 ///
@@ -30,7 +30,8 @@ class YamlScraperLoader {
     http.Client? client,
     void Function(String message)? onLog,
     BuiltinPluginSync? builtinSync,
-  }) : pluginsDirectory = pluginsDirectory ?? Directory(p.join('plugins', 'scrapers')),
+  }) : pluginsDirectory =
+           pluginsDirectory ?? Directory(p.join('plugins', 'scrapers')),
        _client = client,
        _log = onLog,
        _syncBuiltins = builtinSync;
@@ -66,7 +67,10 @@ class YamlScraperLoader {
             (entity.path.endsWith('.yaml') || entity.path.endsWith('.yml'))) {
           try {
             final content = await entity.readAsString();
-            final scraper = YamlScraper.fromYamlString(content, client: _client);
+            final scraper = YamlScraper.fromYamlString(
+              content,
+              client: _client,
+            );
             list.add(scraper);
             _log?.call(
               'YamlScraperLoader: loaded plugin "${scraper.displayName}" (${scraper.id}) from ${entity.path}',
@@ -118,7 +122,8 @@ class YamlScraperLoader {
               timer?.cancel();
               timer = Timer(debounce, emit);
             },
-            onError: (Object e) => _log?.call('YamlScraperLoader: watch error: $e'),
+            onError: (Object e) =>
+                _log?.call('YamlScraperLoader: watch error: $e'),
           );
         } catch (e) {
           _log?.call('YamlScraperLoader: cannot watch plugin directory: $e');

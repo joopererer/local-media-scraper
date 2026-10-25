@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'scraper.dart';
+import '../scraper.dart';
 
 /// Scrapes metadata (title, description, image, site_name, keywords) from a webpage URL.
 class WebPageScraper implements Scraper {
@@ -53,15 +53,18 @@ class WebPageScraper implements Scraper {
       final uri = Uri.parse(targetUrl);
       ctx.log('WebPageScraper: fetching $targetUrl');
 
-      final response = await _client.get(
-        uri,
-        headers: {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        },
-      ).timeout(const Duration(seconds: 10));
+      final response = await _client
+          .get(
+            uri,
+            headers: {
+              'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept':
+                  'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            },
+          )
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         ctx.log('WebPageScraper: HTTP error ${response.statusCode}');
@@ -95,7 +98,11 @@ class WebPageScraper implements Scraper {
     String? keywords;
 
     // 1. <title> tag
-    final titleRegex = RegExp(r'<title[^>]*>(.*?)</title>', caseSensitive: false, dotAll: true);
+    final titleRegex = RegExp(
+      r'<title[^>]*>(.*?)</title>',
+      caseSensitive: false,
+      dotAll: true,
+    );
     final titleMatch = titleRegex.firstMatch(html);
     if (titleMatch != null) {
       titleTag = _decodeHtmlEntities(titleMatch.group(1)!.trim());
@@ -106,7 +113,9 @@ class WebPageScraper implements Scraper {
     for (final match in metaRegex.allMatches(html)) {
       final attrs = match.group(1)!;
 
-      final property = _extractAttribute(attrs, 'property') ?? _extractAttribute(attrs, 'name');
+      final property =
+          _extractAttribute(attrs, 'property') ??
+          _extractAttribute(attrs, 'name');
       final content = _extractAttribute(attrs, 'content');
 
       if (property == null || content == null) continue;
@@ -178,7 +187,9 @@ class WebPageScraper implements Scraper {
 
     final tags = <ProposedTag>[];
     if (keywords != null && keywords.isNotEmpty) {
-      final subKeywords = keywords.split(RegExp(r'[,;、]+')).where((s) => s.trim().isNotEmpty);
+      final subKeywords = keywords
+          .split(RegExp(r'[,;、]+'))
+          .where((s) => s.trim().isNotEmpty);
       for (final kw in subKeywords) {
         final trimmed = kw.trim();
         if (trimmed.length >= 2 && trimmed.length <= 30) {
@@ -206,7 +217,10 @@ class WebPageScraper implements Scraper {
   }
 
   String? _extractAttribute(String tagAttrs, String attrName) {
-    final pattern = RegExp('$attrName\\s*=\\s*(["\'])(.*?)\\1', caseSensitive: false);
+    final pattern = RegExp(
+      '$attrName\\s*=\\s*(["\'])(.*?)\\1',
+      caseSensitive: false,
+    );
     final match = pattern.firstMatch(tagAttrs);
     return match?.group(2);
   }

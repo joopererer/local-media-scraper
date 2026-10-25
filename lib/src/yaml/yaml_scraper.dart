@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:yaml/yaml.dart';
 
-import '../../core/media_types.dart';
-import 'scraper.dart';
+import '../media_type.dart';
+import '../scraper.dart';
 
 /// Configuration schema field definition for a YAML scraper.
 class YamlConfigSchema {
@@ -32,7 +32,8 @@ class YamlConfigSchema {
       label: map['label']?.toString() ?? map['key']?.toString() ?? '',
       type: map['type']?.toString().toLowerCase() ?? 'string',
       required: map['required'] == true,
-      defaultValue: map['default']?.toString() ?? map['default_value']?.toString(),
+      defaultValue:
+          map['default']?.toString() ?? map['default_value']?.toString(),
       description: map['description']?.toString(),
     );
   }
@@ -75,7 +76,9 @@ class YamlRequestUrl {
         raw is Iterable ? raw.map((e) => e.toString()).toList() : const [];
     return YamlRequestUrl(
       url: map['url']?.toString() ?? '',
-      timeoutSeconds: (map['timeout_seconds'] is int) ? map['timeout_seconds'] as int : 10,
+      timeoutSeconds: (map['timeout_seconds'] is int)
+          ? map['timeout_seconds'] as int
+          : 10,
       headers: headers,
       requireBodyContains: strList(map['require_body_contains']),
       rejectBodyContains: strList(map['reject_body_contains']),
@@ -88,16 +91,15 @@ class YamlValueMapEntry {
   final String value;
   final double confidence;
 
-  const YamlValueMapEntry({
-    required this.value,
-    this.confidence = 0.95,
-  });
+  const YamlValueMapEntry({required this.value, this.confidence = 0.95});
 
   factory YamlValueMapEntry.fromYaml(dynamic map) {
     if (map is Map) {
       return YamlValueMapEntry(
         value: map['value']?.toString() ?? '',
-        confidence: (map['confidence'] is num) ? (map['confidence'] as num).toDouble() : 0.95,
+        confidence: (map['confidence'] is num)
+            ? (map['confidence'] as num).toDouble()
+            : 0.95,
       );
     }
     // Shorthand: string value defaults to confidence 0.95
@@ -148,7 +150,8 @@ class YamlFieldRule {
   final bool isPreviewImage;
   final double confidence;
   final double? confidenceKnown; // For prefix_map: confidence when key is found
-  final double? confidenceUnknown; // For prefix_map: confidence when key not found
+  final double?
+  confidenceUnknown; // For prefix_map: confidence when key not found
 
   const YamlFieldRule({
     required this.key,
@@ -170,7 +173,8 @@ class YamlFieldRule {
       throw ArgumentError('Field rule must be a map');
     }
     final key = map['key']?.toString() ?? '';
-    final valType = map['value_type']?.toString().toLowerCase() ??
+    final valType =
+        map['value_type']?.toString().toLowerCase() ??
         (key == 'rating' || key == 'year' ? 'number' : 'string');
     return YamlFieldRule(
       key: key,
@@ -181,9 +185,8 @@ class YamlFieldRule {
       entityType: map['entity_type']?.toString(),
       valueType: valType,
       isTitle: map['is_title'] == true || key == 'title',
-      isPreviewImage: map['is_preview_image'] == true ||
-          key == 'cover' ||
-          key == 'poster',
+      isPreviewImage:
+          map['is_preview_image'] == true || key == 'cover' || key == 'poster',
       confidence: (map['confidence'] is num)
           ? (map['confidence'] as num).toDouble()
           : 0.85,
@@ -218,11 +221,14 @@ class YamlScraper implements Scraper {
   final String? _detailUrlTemplate;
   final bool _autoDrillDownSingle;
   final http.Client? _client;
-  final Map<String, Map<String, YamlValueMapEntry>> _valueMaps; // Prefix mapping tables
+  final Map<String, Map<String, YamlValueMapEntry>>
+  _valueMaps; // Prefix mapping tables
 
   /// Matches values that already carry a URI scheme (`https:`, `data:`) or are
   /// protocol-relative (`//host/path`), i.e. do not need a base URL prefix.
-  static final RegExp _absoluteUriPattern = RegExp(r'^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:|//)');
+  static final RegExp _absoluteUriPattern = RegExp(
+    r'^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:|//)',
+  );
 
   YamlScraper({
     required String id,
@@ -245,35 +251,39 @@ class YamlScraper implements Scraper {
     bool autoDrillDownSingle = true,
     http.Client? client,
     Map<String, Map<String, YamlValueMapEntry>> valueMaps = const {},
-  })  : _id = id,
-        _displayName = displayName,
-        _description = description,
-        _priority = priority,
-        _mediaTypes = mediaTypes,
-        _targetSupertags = targetSupertags,
-        _patternRegex = patternRegex,
-        _supertagToBackfill = supertagToBackfill,
-        _urlTemplate = urlTemplate,
-        _requestUrls = requestUrls,
-        _headers = headers,
-        _timeoutSeconds = timeoutSeconds,
-        _fields = fields,
-        _tags = tags,
-        _configSchema = configSchema,
-        _candidateRule = candidateRule,
-        _detailUrlTemplate = detailUrlTemplate,
-        _autoDrillDownSingle = autoDrillDownSingle,
-        _client = client,
-        _valueMaps = valueMaps;
+  }) : _id = id,
+       _displayName = displayName,
+       _description = description,
+       _priority = priority,
+       _mediaTypes = mediaTypes,
+       _targetSupertags = targetSupertags,
+       _patternRegex = patternRegex,
+       _supertagToBackfill = supertagToBackfill,
+       _urlTemplate = urlTemplate,
+       _requestUrls = requestUrls,
+       _headers = headers,
+       _timeoutSeconds = timeoutSeconds,
+       _fields = fields,
+       _tags = tags,
+       _configSchema = configSchema,
+       _candidateRule = candidateRule,
+       _detailUrlTemplate = detailUrlTemplate,
+       _autoDrillDownSingle = autoDrillDownSingle,
+       _client = client,
+       _valueMaps = valueMaps;
 
-  factory YamlScraper.fromYamlString(String yamlContent, {http.Client? client}) {
+  factory YamlScraper.fromYamlString(
+    String yamlContent, {
+    http.Client? client,
+  }) {
     final doc = loadYaml(yamlContent);
     if (doc is! Map) {
       throw ArgumentError('YAML content must be a key-value mapping.');
     }
 
     final id = doc['id']?.toString() ?? 'custom_yaml';
-    final name = doc['name']?.toString() ?? doc['displayName']?.toString() ?? id;
+    final name =
+        doc['name']?.toString() ?? doc['displayName']?.toString() ?? id;
     final desc = doc['description']?.toString() ?? 'Declarative YAML scraper';
 
     final mediaTypes = <String>[];
@@ -304,8 +314,8 @@ class YamlScraper implements Scraper {
     }
 
     String? urlTemplate;
-    List<YamlRequestUrl> requestUrls = [];
-    Map<String, String> headers = {};
+    final requestUrls = <YamlRequestUrl>[];
+    final headers = <String, String>{};
     int timeout = 10;
 
     // Parse multi-address cascade (request_urls) or legacy single request
@@ -318,7 +328,9 @@ class YamlScraper implements Scraper {
     } else if (doc['request'] is Map) {
       final req = doc['request'] as Map;
       urlTemplate = req['url_template']?.toString();
-      timeout = (req['timeout_seconds'] is int) ? req['timeout_seconds'] as int : 10;
+      timeout = (req['timeout_seconds'] is int)
+          ? req['timeout_seconds'] as int
+          : 10;
       if (req['headers'] is Map) {
         (req['headers'] as Map).forEach((k, v) {
           headers[k.toString()] = v.toString();
@@ -336,7 +348,9 @@ class YamlScraper implements Scraper {
       }
     }
 
-    final priority = (doc['priority'] is num) ? (doc['priority'] as num).toInt() : 60;
+    final priority = (doc['priority'] is num)
+        ? (doc['priority'] as num).toInt()
+        : 60;
 
     final configSchemaList = <YamlConfigSchema>[];
     final configSchemaRaw = doc['config_schema'] ?? doc['config'];
@@ -378,7 +392,9 @@ class YamlScraper implements Scraper {
         if (entries is Map) {
           final innerMap = <String, YamlValueMapEntry>{};
           entries.forEach((key, value) {
-            innerMap[key.toString().toUpperCase()] = YamlValueMapEntry.fromYaml(value);
+            innerMap[key.toString().toUpperCase()] = YamlValueMapEntry.fromYaml(
+              value,
+            );
           });
           valueMaps[mapName.toString()] = innerMap;
         }
@@ -496,7 +512,9 @@ class YamlScraper implements Scraper {
     });
 
     // 2. Process Fallbacks: {var1 ?? var2 ?? var3}
-    final fallbackRegex = RegExp(r'\{([0-9a-zA-Z_:]+(?:\s*\?\?\s*[0-9a-zA-Z_:]+)+)\}');
+    final fallbackRegex = RegExp(
+      r'\{([0-9a-zA-Z_:]+(?:\s*\?\?\s*[0-9a-zA-Z_:]+)+)\}',
+    );
     res = res.replaceAllMapped(fallbackRegex, (m) {
       final expr = m.group(1)!;
       final tokens = expr.split('??').map((t) => t.trim());
@@ -550,23 +568,29 @@ class YamlScraper implements Scraper {
     // 0. Check media type restriction if specified
     if (_mediaTypes.isNotEmpty) {
       var resType = input.subject.mediaType?.toLowerCase();
-      if (resType == null || resType.isEmpty || resType == MediaTypes.other) {
+      if (resType == null || resType.isEmpty || resType == MediaKind.other) {
         final checkPath = input.subject.uri ?? input.fileName ?? '';
         if (checkPath.isNotEmpty) {
-          resType = MediaTypes.detectMediaTypeFromExtension(checkPath);
+          resType = MediaKind.fromExtension(checkPath);
         }
       }
-      if (resType != null && resType.isNotEmpty && resType != MediaTypes.other && !_mediaTypes.contains(resType)) {
+      if (resType != null &&
+          resType.isNotEmpty &&
+          resType != MediaKind.other &&
+          !_mediaTypes.contains(resType)) {
         return false;
       }
-      if (_mediaTypes.length == 1 && _mediaTypes.first == MediaTypes.video && resType != MediaTypes.video) {
+      if (_mediaTypes.length == 1 &&
+          _mediaTypes.first == MediaKind.video &&
+          resType != MediaKind.video) {
         return false;
       }
     }
 
     // 1. Check Supertags
     final existingTags = input.existingTagNames;
-    if (_targetSupertags.isNotEmpty && _targetSupertags.any((st) => existingTags.contains(st.toLowerCase()))) {
+    if (_targetSupertags.isNotEmpty &&
+        _targetSupertags.any((st) => existingTags.contains(st.toLowerCase()))) {
       return true;
     }
 
@@ -627,10 +651,7 @@ class YamlScraper implements Scraper {
         });
 
         final resp = await client
-            .get(
-              Uri.parse(reqUrl),
-              headers: effectiveHeaders,
-            )
+            .get(Uri.parse(reqUrl), headers: effectiveHeaders)
             .timeout(Duration(seconds: timeoutSeconds ?? _timeoutSeconds));
 
         if (resp.statusCode == 200) {
@@ -672,7 +693,9 @@ class YamlScraper implements Scraper {
             if (rejection != null) {
               // Age gates usually answer 200, so a body check is the only way to
               // tell them apart from a real detail page.
-              ctx.log('YamlScraper($_id): $requestUrl 正文校验未通过（$rejection），尝试下一个地址'); // i18n:ignore 日志
+              ctx.log(
+                'YamlScraper($_id): $requestUrl 正文校验未通过（$rejection），尝试下一个地址',
+              ); // i18n:ignore 日志
               continue;
             }
             responseBody = body;
@@ -680,7 +703,9 @@ class YamlScraper implements Scraper {
             break; // Success, stop cascade
           }
         } else {
-          ctx.log('YamlScraper($_id): unreplaced placeholders in cascade URL, skipping');
+          ctx.log(
+            'YamlScraper($_id): unreplaced placeholders in cascade URL, skipping',
+          );
         }
       }
     }
@@ -697,7 +722,9 @@ class YamlScraper implements Scraper {
 
       // Guard: if any unreplaced placeholder remains, abort request
       if (RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(requestUrl)) {
-        ctx.log('YamlScraper($_id): 匹配未命中或占位符未替换完毕 ($requestUrl)，跳过网络请求'); // i18n:ignore 日志
+        ctx.log(
+          'YamlScraper($_id): 匹配未命中或占位符未替换完毕 ($requestUrl)，跳过网络请求',
+        ); // i18n:ignore 日志
       } else {
         final res = await fetchUrl(requestUrl);
         responseBody = res.body;
@@ -719,27 +746,45 @@ class YamlScraper implements Scraper {
       if (rawItems is List) {
         for (final item in rawItems) {
           if (item is Map) {
-            final t = _resolveSource(candRule.titleSource, rawText: '', jsonData: item)?.toString();
+            final t = _resolveSource(
+              candRule.titleSource,
+              rawText: '',
+              jsonData: item,
+            )?.toString();
             if (t != null && t.trim().isNotEmpty) {
               final subRule = candRule.subtitleSource;
               final sub = subRule != null
-                  ? _resolveSource(subRule, rawText: '', jsonData: item)?.toString()
+                  ? _resolveSource(
+                      subRule,
+                      rawText: '',
+                      jsonData: item,
+                    )?.toString()
                   : null;
               final uRule = candRule.urlSource;
               final u = uRule != null
-                  ? _resolveSource(uRule, rawText: '', jsonData: item)?.toString()
+                  ? _resolveSource(
+                      uRule,
+                      rawText: '',
+                      jsonData: item,
+                    )?.toString()
                   : null;
               final cRule = candRule.coverSource;
               final cov = cRule != null
-                  ? _resolveSource(cRule, rawText: '', jsonData: item)?.toString()
+                  ? _resolveSource(
+                      cRule,
+                      rawText: '',
+                      jsonData: item,
+                    )?.toString()
                   : null;
-              extractedCandidates.add(ScrapeCandidate(
-                title: t.trim(),
-                subtitle: sub?.trim(),
-                url: u?.trim(),
-                coverUrl: cov?.trim(),
-                extra: Map<String, dynamic>.from(item),
-              ));
+              extractedCandidates.add(
+                ScrapeCandidate(
+                  title: t.trim(),
+                  subtitle: sub?.trim(),
+                  url: u?.trim(),
+                  coverUrl: cov?.trim(),
+                  extra: Map<String, dynamic>.from(item),
+                ),
+              );
             }
           }
         }
@@ -770,7 +815,9 @@ class YamlScraper implements Scraper {
         );
 
         if (!RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(detailUrl)) {
-          ctx.log('YamlScraper($_id): 命中唯一候选结果，自动执行二级深挖 -> $detailUrl'); // i18n:ignore 日志
+          ctx.log(
+            'YamlScraper($_id): 命中唯一候选结果，自动执行二级深挖 -> $detailUrl',
+          ); // i18n:ignore 日志
           final detailRes = await fetchUrl(detailUrl);
           if (detailRes.body != null) {
             responseBody = detailRes.body;
@@ -794,7 +841,8 @@ class YamlScraper implements Scraper {
       );
 
       // Fallback if primary source produced null or empty string
-      if ((val == null || val.toString().trim().isEmpty) && rule.fallback != null) {
+      if ((val == null || val.toString().trim().isEmpty) &&
+          rule.fallback != null) {
         val = _resolveSource(
           rule.fallback!,
           rawText: responseBody ?? targetStr,
@@ -804,10 +852,10 @@ class YamlScraper implements Scraper {
       }
 
       if (val != null && val.toString().trim().isNotEmpty) {
-        var valStr = val is Map && val.containsKey('value') 
-            ? val['value'].toString().trim() 
+        var valStr = val is Map && val.containsKey('value')
+            ? val['value'].toString().trim()
             : val.toString().trim();
-        
+
         if (valStr.isEmpty) continue;
 
         // `prefix` acts as a base URL for relative references (e.g. a cover path
@@ -837,18 +885,20 @@ class YamlScraper implements Scraper {
         // Use confidence from prefix_map result if available, otherwise use rule's confidence
         double effectiveConfidence = rule.confidence;
         if (val is Map && val.containsKey('confidence')) {
-          effectiveConfidence = val['confidence'] is num 
-              ? (val['confidence'] as num).toDouble() 
+          effectiveConfidence = val['confidence'] is num
+              ? (val['confidence'] as num).toDouble()
               : rule.confidence;
-        } else if (rule.source.startsWith('value_map:') || rule.source.startsWith('prefix_map:')) {
+        } else if (rule.source.startsWith('value_map:') ||
+            rule.source.startsWith('prefix_map:')) {
           // Use confidence_known or confidence_unknown based on whether we found mapping
           if (val is Map && val['value'] != null) {
             // Check if it's a mapped value or fallback
             final isExactOnly = rule.source.startsWith('value_map:');
             final mapName = rule.source.substring(isExactOnly ? 10 : 11);
             final key = (match?.group(1) ?? '').toUpperCase();
-            final isKnown = _valueMaps.containsKey(mapName) && 
-                            _valueMaps[mapName]!.containsKey(key);
+            final isKnown =
+                _valueMaps.containsKey(mapName) &&
+                _valueMaps[mapName]!.containsKey(key);
             if (isKnown && rule.confidenceKnown != null) {
               effectiveConfidence = rule.confidenceKnown!;
             } else if (!isKnown && rule.confidenceUnknown != null) {
@@ -857,15 +907,17 @@ class YamlScraper implements Scraper {
           }
         }
 
-        extractedFields.add(ProposedField(
-          key: rule.key,
-          valueText: valStr,
-          valueNum: valNum,
-          entityName: rule.entityType != null ? valStr : null,
-          entityType: rule.entityType,
-          confidence: effectiveConfidence,
-          source: 'scraper:$_id',
-        ));
+        extractedFields.add(
+          ProposedField(
+            key: rule.key,
+            valueText: valStr,
+            valueNum: valNum,
+            entityName: rule.entityType != null ? valStr : null,
+            entityType: rule.entityType,
+            confidence: effectiveConfidence,
+            source: 'scraper:$_id',
+          ),
+        );
       }
     }
 
@@ -884,18 +936,30 @@ class YamlScraper implements Scraper {
             for (final item in val) {
               final s = item.toString().trim();
               if (s.isNotEmpty) {
-                final parts = s.split('/').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+                final parts = s
+                    .split('/')
+                    .map((p) => p.trim())
+                    .where((p) => p.isNotEmpty)
+                    .toList();
                 if (parts.isNotEmpty) {
-                  extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.85));
+                  extractedTags.add(
+                    ProposedTag(tagPath: parts, confidence: 0.85),
+                  );
                 }
               }
             }
           } else {
             final s = val.toString().trim();
             if (s.isNotEmpty) {
-              final parts = s.split('/').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+              final parts = s
+                  .split('/')
+                  .map((p) => p.trim())
+                  .where((p) => p.isNotEmpty)
+                  .toList();
               if (parts.isNotEmpty) {
-                extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.85));
+                extractedTags.add(
+                  ProposedTag(tagPath: parts, confidence: 0.85),
+                );
               }
             }
           }
@@ -909,30 +973,45 @@ class YamlScraper implements Scraper {
           for (final m in matches) {
             final s = (m.groupCount >= 1 ? m.group(1) : m.group(0))?.trim();
             if (s != null && s.isNotEmpty) {
-              final parts = s.split('/').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+              final parts = s
+                  .split('/')
+                  .map((p) => p.trim())
+                  .where((p) => p.isNotEmpty)
+                  .toList();
               if (parts.isNotEmpty) {
-                extractedTags.add(ProposedTag(tagPath: parts, confidence: 0.85));
+                extractedTags.add(
+                  ProposedTag(tagPath: parts, confidence: 0.85),
+                );
               }
             }
           }
         } catch (_) {}
       } else {
-        // Static or parameterized tag path e.g. "JAV / 女优 / {actress}"
+        // Static or parameterized tag path e.g. "影视 / 演员 / {actress}"
         String resolvedTag = tagDef;
         for (final field in extractedFields) {
           if (field.valueText != null) {
-            resolvedTag = resolvedTag.replaceAll('{${field.key}}', field.valueText!);
+            resolvedTag = resolvedTag.replaceAll(
+              '{${field.key}}',
+              field.valueText!,
+            );
           }
         }
         // If placeholder still unresolved (e.g. {actress} without actress found), ignore
         if (!RegExp(r'\{[a-zA-Z0-9_]+\}').hasMatch(resolvedTag)) {
-          final parts = resolvedTag.split('/').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+          final parts = resolvedTag
+              .split('/')
+              .map((s) => s.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
           if (parts.isNotEmpty) {
-            extractedTags.add(ProposedTag(
-              tagPath: parts,
-              confidence: 0.9,
-              rawTemplate: tagDef.contains('{') ? tagDef : null,
-            ));
+            extractedTags.add(
+              ProposedTag(
+                tagPath: parts,
+                confidence: 0.9,
+                rawTemplate: tagDef.contains('{') ? tagDef : null,
+              ),
+            );
           }
         }
       }
@@ -991,25 +1070,26 @@ class YamlScraper implements Scraper {
         return match.group(idx);
       }
       return null;
-    } else if (source.startsWith('value_map:') || source.startsWith('prefix_map:')) {
+    } else if (source.startsWith('value_map:') ||
+        source.startsWith('prefix_map:')) {
       // Resolve value using value_maps table
       // value_map: exact match only (no fallback)
       // prefix_map: exact match with fallback to prefix itself
       final isExactOnly = source.startsWith('value_map:');
       final mapName = source.substring(isExactOnly ? 10 : 11);
       if (!_valueMaps.containsKey(mapName)) return null;
-      
+
       // Extract lookup key from match group 1 (first captured group from pattern)
       if (match == null || match.groupCount < 1) return null;
       final key = match.group(1)?.toUpperCase() ?? '';
       if (key.isEmpty) return null;
-      
+
       final valueMap = _valueMaps[mapName]!;
       if (valueMap.containsKey(key)) {
         final entry = valueMap[key]!;
         return {'value': entry.value, 'confidence': entry.confidence};
       }
-      
+
       // value_map: no match -> return null
       // prefix_map: no match -> return prefix itself as fallback
       if (isExactOnly) {
