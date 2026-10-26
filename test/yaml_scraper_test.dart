@@ -252,6 +252,131 @@ fields:
     });
   });
 
+  group('HTML list page -> detail (items with regex source)', () {
+    const listPage = '''
+<div class="item"><a href="/v/AAA111" class="box">
+  <div class="cover"><img loading="lazy" src="https://cdn.example.com/aaa.jpg"></div>
+  <div class="video-title"><strong>ABC-123</strong> Wanted Title</div>
+  <div class="meta">2016-05-01</div>
+</a></div>
+<div class="item"><a href="/v/BBB222" class="box">
+  <div class="cover"><img loading="lazy" src="https://cdn.example.com/bbb.jpg"></div>
+  <div class="video-title"><strong>ABC-124</strong> Other Title</div>
+  <div class="meta">2017-01-01</div>
+</a></div>
+''';
+
+    const detailPage = '''
+<h1><strong class="current-title">Wanted Title</strong></h1>
+<span class="value">2016-05-01</span>
+<a class="actor-female" href="/actors/x">Jane Doe</a>
+<img class="video-cover" src="https://cdn.example.com/aaa_big.jpg">
+''';
+
+    const yaml = '''
+id: "html_list"
+name: "HTML list page"
+description: "HTML list page drills into the matching detail page"
+priority: 70
+pattern: '([A-Za-z]{2,6})-(\\d+)'
+request_urls:
+  - url: "https://list.example.com/search?q={0}"
+fields:
+  - key: "title"
+    source: 'regex:<strong class="current-title">([^<]+)</strong>'
+    is_title: true
+  - key: "actress"
+    source: 'regex:<a class="actor-female"[^>]*>([^<]+)</a>'
+    entity_type: "actress"
+  - key: "cover"
+    source: 'regex:<img class="video-cover" src="([^"]+)"'
+    is_preview_image: true
+items:
+  source: 'regex:<div class="item">[\\s\\S]*?</div>\\s*</a></div>'
+  title: 'regex:<div class="video-title">(?:<strong>[^<]*</strong>)?\\s*([^<]+)</div>'
+  url: 'regex:<a href="([^"]+)"'
+  cover: 'regex:<img[^>]+src="([^"]+)"'
+  filter: '(?:^|[^A-Za-z0-9]){1}-{2}(?:[^0-9]|\$)'
+detail_request:
+  url_template: "https://detail.example.com{url|raw}"
+  auto_drill_down_single: true
+''';
+
+    MockClient listThenDetail() => MockClient((request) async {
+      if (request.url.host == 'list.example.com') {
+        return http.Response(listPage, 200);
+      }
+      if (request.url.host == 'detail.example.com') {
+        return http.Response(detailPage, 200);
+      }
+      return http.Response('', 404);
+    });
+
+    test('extracts one candidate per HTML block and filters by code', () async {
+      final scraper = build(yaml, client: listThenDetail());
+      final result = await scraper.scrape(
+        const ScrapeInput(
+          subject: ScrapeSubject(id: 'h1'),
+          fileName: 'ABC-123.mp4',
+        ),
+        const ScrapeContext(),
+      );
+
+      expect(result.candidates, hasLength(1));
+      expect(result.proposedTitle, 'Wanted Title');
+      expect(
+        result.fields.firstWhere((f) => f.key == 'actress').entityName,
+        'Jane Doe',
+      );
+      expect(result.previewImageUrl, 'https://cdn.example.com/aaa_big.jpg');
+    });
+
+    test('does not drill down when the filter matches nothing', () async {
+      final scraper = build(yaml, client: listThenDetail());
+      final result = await scraper.scrape(
+        const ScrapeInput(
+          subject: ScrapeSubject(id: 'h2'),
+          fileName: 'ZZZ-999.mp4',
+        ),
+        const ScrapeContext(),
+      );
+
+      expect(result.proposedTitle, isNull);
+    });
+
+    test('sends browser-like Accept-Language by default', () async {
+      final seen = <String, String>{};
+      final scraper = build(
+        '''
+id: "hdr"
+name: "Header probe"
+description: "probe"
+pattern: 'ABC-(\\d+)'
+request_urls:
+  - url: "https://probe.example.com/{0}"
+fields:
+  - key: "title"
+    source: 'regex:<title>([^<]+)</title>'
+''',
+        client: MockClient((request) async {
+          seen.addAll(request.headers);
+          return http.Response('<title>ok</title>', 200);
+        }),
+      );
+
+      await scraper.scrape(
+        const ScrapeInput(
+          subject: ScrapeSubject(id: 'h3'),
+          fileName: 'ABC-1.mp4',
+        ),
+        const ScrapeContext(),
+      );
+
+      expect(seen['Accept-Language'], contains('zh-CN'));
+      expect(seen['User-Agent'], contains('Mozilla'));
+    });
+  });
+
   group('parse errors', () {
     test('rejects a document that is not a mapping', () {
       expect(

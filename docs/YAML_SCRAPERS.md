@@ -129,15 +129,25 @@ request:
 # ==============================================================================
 # 当接口返回多条搜索匹配候选时提取列表，供用户核验弹窗交互选择；
 # 若仅返回唯一候选且配置了 auto_drill_down_single: true，将自动进入二级深度挖掘请求。
+#
+# items.source 有两种写法：
+#   - "json:..."  ：JSON 数组，每个元素一个候选（子规则用 json: 路径）
+#   - "regex:..." ：HTML 分块正则，**每一处匹配**是一个候选（子规则用 regex:，
+#                    或 `1`/`2` 取该分块的捕获组）
+# items.filter 可选：用 pattern 的捕获组渲染成一个正则（如 {1}-{2}），
+#   只保留命中它的候选，避免搜索结果首条不是目标（HTML 搜索页几乎必须写）。
 items:
-  source: "json:data.results"    # 候选数组所在 JSON 路径（当前仅支持 JSON 数组，不支持从 HTML 提取候选）
-  title: "json:title"            # 候选主标题
-  subtitle: "json:director"      # 候选副标题 / 补充信息
-  url: "json:detail_url"         # 候选跳转或详情地址
-  cover: "json:poster"           # 候选缩略图 / 海报
+  source: "json:data.results"    # 或 'regex:<div class="item">[\s\S]*?</div>\s*</a></div>'
+  title: "json:title"            # 或 'regex:<div class="video-title">(?:<strong>[^<]*</strong>)?\s*([^<]+)</div>'
+  subtitle: "json:director"
+  url: "json:detail_url"         # 或 'regex:<a href="([^"]+)"'
+  cover: "json:poster"
+  filter: '(?:^|[^A-Za-z0-9]){1}-{2}(?:[^0-9]|$)'   # 可选，仅保留真正匹配番号的候选
 
 detail_request:
-  url_template: "{if {config:base_url}}{config:base_url}{else}https://api.example.com{/if}/detail?id={id}"
+  url_template: "https://detail.example.com{url|raw}"
+  # {url|raw} = 原样插入；HTML 里拿到的通常是 /v/xxx 这种站内相对路径，
+  # 用 {url} 会被 URL 编码成 %2Fv%2Fxxx，请求会 404。
   auto_drill_down_single: true   # 当候选数量为 1 时，无需询问自动触发二级详情请求
 
 # ==============================================================================
@@ -281,7 +291,7 @@ fields:
 | 单个 `regex:` 只取第一处匹配 | 页面上有多个演员 / 多个类别时，字段只能拿到第一个。字段值按 key 存储，也没有「一字段多值」的通道。 |
 | `fields` 只有 `source` + `fallback` 两级 | 无法表达「主站解析 → 备用站解析 → 本地映射表」三级回退。常见做法是把多个站点的结构合并进同一条正则（用标记前缀做分支，共享一个捕获组）。 |
 | `prefix_map:` / `value_map:` 只读捕获组 1 | 查询键固定取 `pattern` 的第 1 组，无法指定别的组。多分支正则必须让每个分支的「键」都落在组 1。 |
-| `items:` 只支持 JSON 路径 | 候选列表只能来自 JSON 数组，无法从 HTML 搜索结果页生成候选，因此「搜索页 → 详情页」的自动深挖对网页站点不可用（`detail_request` 只能配合 JSON 候选使用）。 |
+| `items:` 的 HTML 分块靠正则，不是真正的 DOM 解析 | `source` 用 `regex:` 时按「匹配一片 HTML」来分块（例如 `<div class="item">[\s\S]*?</a></div>`），嵌套层级深的站点写起来容易脆；`filter` 不写就可能把列表首条当成目标。 |
 | 字段值无 `{config:...}` 模板 | `prefix` / `suffix` 是静态字符串，不能拼配置项。相对 URL 会由 `prefix` 补成绝对地址（已是绝对 URL 则不拼接），但域名无法跟随配置项变化，镜像站的封面/图片需要写死域名。 |
 | 无「提取后处理」 | 没有 regex-replace、去后缀、拼接等后处理，裁剪标题后缀一类需求只能塞进正则本身。 |
 
@@ -337,7 +347,45 @@ tags:
   - "电影 / 导演 / {director}"
 ```
 
-### 样例 2：Bilibili 视频 API 抓取 (`bilibili.yaml`)
+### 样例 2：网页搜索结果 → 详情页（`search_then_detail.yaml`）
+
+搜索页没有 API 时，用 `items:` 的 `regex:` 分块 + `filter` 锁定目标，再自动深挖详情页：
+
+```yaml
+id: "search_then_detail"
+name: "搜索页 → 详情页"
+description: "先搜号，再进详情页抓标题、演员、封面"
+priority: 60
+pattern: '([A-Za-z]{2,6})[-_]?(\d{2,5})'
+request_urls:
+  - url: "https://site.example.com/search?q={1}-{2}"
+    reject_body_contains: ["Age Verification"]
+fields:
+  - key: "title"
+    source: 'regex:<strong class="current-title">([^<]+)</strong>'
+    is_title: true
+  - key: "actress"
+    source: 'regex:<a class="actor-female"[^>]*>([^<]+)</a>'
+    entity_type: "actress"
+  - key: "cover"
+    source: 'regex:<img class="video-cover" src="([^"]+)"'
+    is_preview_image: true
+items:
+  source: 'regex:<div class="item">[\s\S]*?</div>\s*</a></div>'
+  title: 'regex:<div class="video-title">(?:<strong>[^<]*</strong>)?\s*([^<]+)</div>'
+  url: 'regex:<a href="([^"]+)"'
+  cover: 'regex:<img[^>]+src="([^"]+)"'
+  filter: '(?:^|[^A-Za-z0-9]){1}-{2}(?:[^0-9]|$)'
+detail_request:
+  url_template: "https://site.example.com{url|raw}"
+  auto_drill_down_single: true
+```
+
+要点：
+- `filter` 命中恰好 1 条候选 → 自动请求 `detail_request`，`fields` 在详情页正文上解析。
+- `{url|raw}` 不编码，直接拼 `/v/xxx` 这类相对路径。
+
+### 样例 3：Bilibili 视频 API 抓取 (`bilibili.yaml`)
 根据 BV 号自动从 Bilibili 官方开放接口提取视频标题、UP 主与分区：
 ```yaml
 id: "bilibili"
@@ -403,10 +451,12 @@ tags:
 - 通过 `ScraperSettings(priorityOverrides: {'my_scraper': 80})` 覆写优先级，或给插件写更大的 `priority`。
 - 当多个刮削器命中同一个文件时，优先级数值更高的先执行，其标题/封面优先被采用。
 
-### 4. 已知限制（v1）
+### 4. 已知限制（v1.1）
 - 每个字段只取单个值；多值字段需拆成多个 field 规则。
 - `request_urls` 级联只在第一个通过守卫的地址上继续。
 - `value_map:` 固定读取 `pattern` 的第 1 个捕获组。
 - JSON 路径的 `items[0]` 索引仅对 JSON 有效，不作用于 HTML。
 - `prefix:` 不能包含模板占位符。
+- HTML 候选分块靠正则而非 DOM；搜索页建议配 `items.filter`。
+- 「搜索页 → 详情页」两级抓取目前只在 `auto_drill_down_single` 生效（候选恰好 1 条）时自动执行；多候选需在核验弹窗里选。
 - 暂不提供抽出后处理（大小写转换、拆分等）。

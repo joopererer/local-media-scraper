@@ -108,6 +108,12 @@ class YamlValueMapEntry {
 }
 
 /// Candidate parsing rule for multi-item/search scraping.
+///
+/// Two flavours are supported:
+/// - JSON APIs: [source] is a `json:` path returning a list of objects.
+/// - HTML pages: [source] is a `regex:` whose **every** match becomes one
+///   candidate; inside it, `regex:` sub-sources run against that block and
+///   `1`, `2`, ... read the block's capture groups.
 class YamlCandidateRule {
   final String source;
   final String titleSource;
@@ -115,12 +121,19 @@ class YamlCandidateRule {
   final String? urlSource;
   final String? coverSource;
 
+  /// Optional template rendered with the pattern match (e.g. `'\b{1}\b'`) and
+  /// used as a regex to keep only candidates that really are the wanted item.
+  /// Essential for HTML search pages, where the first hit is not necessarily
+  /// the right one.
+  final String? filter;
+
   const YamlCandidateRule({
     required this.source,
     required this.titleSource,
     this.subtitleSource,
     this.urlSource,
     this.coverSource,
+    this.filter,
   });
 
   factory YamlCandidateRule.fromYaml(dynamic map) {
@@ -133,6 +146,7 @@ class YamlCandidateRule {
       subtitleSource: map['subtitle']?.toString(),
       urlSource: map['url']?.toString(),
       coverSource: map['cover']?.toString() ?? map['cover_url']?.toString(),
+      filter: map['filter']?.toString(),
     );
   }
 }
@@ -544,6 +558,12 @@ class YamlScraper implements Scraper {
     }
 
     if (extraVariables != null) {
+      // `{name|raw}` inserts the value untouched. Needed when the value is a
+      // path (e.g. a detail-page href like `/v/5Ey9p`) rather than a query
+      // parameter: URL-encoding a leading slash breaks the request.
+      extraVariables.forEach((k, v) {
+        res = res.replaceAll('{$k|raw}', v);
+      });
       extraVariables.forEach((k, v) {
         res = res.replaceAll('{$k}', Uri.encodeComponent(v));
       });
@@ -637,6 +657,12 @@ class YamlScraper implements Scraper {
         final effectiveHeaders = <String, String>{
           'User-Agent':
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          // Some sites (e.g. JavBus) answer a full 200 with an age-gate page
+          // unless the request looks like a browser; Accept-Language is what
+          // they check, so it is part of the defaults rather than per-plugin.
+          'Accept':
+              'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
           'Cookie': 'existmag=all; age=verified; over18=1',
         };
 
@@ -736,56 +762,116 @@ class YamlScraper implements Scraper {
     final extractedCandidates = <ScrapeCandidate>[];
     final candRule = _candidateRule;
     if (candRule != null && (responseBody != null || jsonRoot != null)) {
-      final rawItems = _resolveSource(
-        candRule.source,
-        rawText: responseBody ?? '',
-        jsonData: jsonRoot,
-        match: match,
-      );
+      List<dynamic> rawItems = const [];
+      final htmlBlocks = <String>[];
 
-      if (rawItems is List) {
-        for (final item in rawItems) {
-          if (item is Map) {
-            final t = _resolveSource(
-              candRule.titleSource,
-              rawText: '',
-              jsonData: item,
-            )?.toString();
-            if (t != null && t.trim().isNotEmpty) {
-              final subRule = candRule.subtitleSource;
-              final sub = subRule != null
-                  ? _resolveSource(
-                      subRule,
-                      rawText: '',
-                      jsonData: item,
-                    )?.toString()
-                  : null;
-              final uRule = candRule.urlSource;
-              final u = uRule != null
-                  ? _resolveSource(
-                      uRule,
-                      rawText: '',
-                      jsonData: item,
-                    )?.toString()
-                  : null;
-              final cRule = candRule.coverSource;
-              final cov = cRule != null
-                  ? _resolveSource(
-                      cRule,
-                      rawText: '',
-                      jsonData: item,
-                    )?.toString()
-                  : null;
-              extractedCandidates.add(
-                ScrapeCandidate(
-                  title: t.trim(),
-                  subtitle: sub?.trim(),
-                  url: u?.trim(),
-                  coverUrl: cov?.trim(),
-                  extra: Map<String, dynamic>.from(item),
-                ),
-              );
+      if (responseBody != null && _isRegexSource(candRule.source)) {
+        // HTML list page: every match of the block regex is one candidate.
+        final blockPattern = RegExp(
+          candRule.source.substring(6),
+          caseSensitive: false,
+        );
+        for (final m in blockPattern.allMatches(responseBody)) {
+          final block = m.group(0) ?? '';
+          if (block.isEmpty) continue;
+          htmlBlocks.add(block);
+          rawItems = [
+            ...rawItems,
+            {
+              for (var g = 0; g <= m.groupCount; g++)
+                if (m.group(g) != null) g.toString(): m.group(g),
+            },
+          ];
+        }
+      } else {
+        final resolved = _resolveSource(
+          candRule.source,
+          rawText: responseBody ?? '',
+          jsonData: jsonRoot,
+          match: match,
+        );
+        if (resolved is List) rawItems = resolved;
+      }
+
+      // Optional filter: keep only the candidate(s) matching the rendered template.
+      final filterTemplate = candRule.filter;
+      if (filterTemplate != null && filterTemplate.trim().isNotEmpty) {
+        final filterPattern = renderTemplate(
+          filterTemplate,
+          match: match,
+          targetStr: targetStr,
+          getConfig: ctx.getConfig,
+        );
+        if (!RegExp(r'\{[0-9a-zA-Z_]+\}').hasMatch(filterPattern)) {
+          try {
+            final filterRegex = RegExp(filterPattern, caseSensitive: false);
+            final keptItems = <dynamic>[];
+            final keptBlocks = <String>[];
+            for (var i = 0; i < rawItems.length; i++) {
+              final haystack = i < htmlBlocks.length
+                  ? htmlBlocks[i]
+                  : rawItems[i].toString();
+              if (filterRegex.hasMatch(haystack)) {
+                keptItems.add(rawItems[i]);
+                if (i < htmlBlocks.length) keptBlocks.add(htmlBlocks[i]);
+              }
             }
+            if (keptItems.isNotEmpty) {
+              rawItems = keptItems;
+              htmlBlocks
+                ..clear()
+                ..addAll(keptBlocks);
+            }
+          } catch (e) {
+            ctx.log(
+              'YamlScraper($_id): items.filter 正则无效: $e',
+            ); // i18n:ignore 日志
+          }
+        }
+      }
+
+      for (var i = 0; i < rawItems.length; i++) {
+        final item = rawItems[i];
+        final blockText = i < htmlBlocks.length ? htmlBlocks[i] : '';
+        // HTML blocks use `regex:` sub-sources or `1`, `2`, ... group refs;
+        // JSON items use `json:` paths or plain keys.
+        final isHtml = blockText.isNotEmpty;
+        Match? blockMatch;
+        if (isHtml) {
+          blockMatch = RegExp(
+            candRule.source.substring(6),
+            caseSensitive: false,
+          ).firstMatch(blockText);
+        }
+
+        String? resolve(dynamic subSource) {
+          if (subSource == null) return null;
+          final src = subSource.toString();
+          if (!isHtml) {
+            return _resolveSource(src, rawText: '', jsonData: item)?.toString();
+          }
+          if (src.startsWith('regex:')) {
+            return _resolveSource(src, rawText: blockText)?.toString();
+          }
+          return _resolveSource(
+            src,
+            rawText: blockText,
+            match: blockMatch,
+          )?.toString();
+        }
+
+        if (item is Map) {
+          final t = resolve(candRule.titleSource);
+          if (t != null && t.trim().isNotEmpty) {
+            extractedCandidates.add(
+              ScrapeCandidate(
+                title: t.trim(),
+                subtitle: resolve(candRule.subtitleSource)?.trim(),
+                url: resolve(candRule.urlSource)?.trim(),
+                coverUrl: resolve(candRule.coverSource)?.trim(),
+                extra: Map<String, dynamic>.from(item),
+              ),
+            );
           }
         }
       }
@@ -1042,6 +1128,8 @@ class YamlScraper implements Scraper {
     }
     return null;
   }
+
+  static bool _isRegexSource(String source) => source.startsWith('regex:');
 
   /// Resolves value from json, regex, static definition, or prefix mapping table.
   /// Returns either a plain value or a map with 'value' and 'confidence' keys for mapped lookups.
