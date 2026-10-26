@@ -131,6 +131,13 @@ would misbehave silently. New optional YAML keys and new built-in scrapers are
 
 Released `v*` tags are never moved or deleted. Fixes ship as the next revision.
 
+### Built-in scraper ids are reserved
+
+The host app registers scrapers by id, so a plugin using `id: douban` would
+**replace** the built-in `DoubanScraper`. Never ship a YAML plugin with an id
+that matches a built-in scraper (`filename`, `web_page`, `tmdb`, `douban`,
+`bangumi`); give user plugins their own ids (e.g. `douban_mirror`).
+
 ## Disclaimer
 
 Scrapers send requests to third-party sites. Comply with each site's terms of

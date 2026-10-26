@@ -6,6 +6,37 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
+### Added
+
+- **Douban**: title search. When no subject id is available the scraper now
+  searches Douban by the cleaned-up file name (`movie.douban.com/j/subject_suggest`
+  for films, `book.douban.com/...` for ebooks) and then reads the mobile
+  "rexxar" JSON API (`m.douban.com/rexxar/api/v2/{movie,tv,book}/{id}`).
+- **Douban**: ebooks. A PDF/EPUB/MOBI/AZW3… file is looked up as a book
+  (author, rating, publisher-era tags) instead of a film.
+- **Bangumi**: title search through the v0 search API; the anime title parsed
+  from the file name (e.g. `[Nekomoe] Frieren - 01`) is looked up and the
+  episode number is kept on the result. Falls back to the old file-name
+  heuristic when nothing is found.
+
+### Changed
+
+- **Douban** no longer scrapes the desktop HTML page as its primary path. Those
+  pages answer HTTP 200 with a JS anti-bot shell (`载入中 ...`), so every regex
+  silently produced nothing. The HTML parser remains as a last-resort fallback.
+- `canHandle` for Douban now ignores camera dumps and placeholder names
+  (`IMG_1234`, `untitled`, …) so a library scan does not fire a request per file.
+
+### Fixed
+
+- Douban/TMDB/Bangumi **bundled YAML plugins shadowed the built-in Dart
+  scrapers** because they shared the same scraper ids, which made the better
+  implementations unreachable and left the visible plugin unable to build its
+  request URL. The three YAML files are no longer needed and have been removed
+  from the host app.
+
 ## [0.1.1] - 2026-10-26
 
 ### Added

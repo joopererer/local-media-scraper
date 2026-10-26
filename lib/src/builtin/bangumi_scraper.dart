@@ -121,6 +121,29 @@ class BangumiScraper implements Scraper {
       final animeTitle = episodeMatch.group(1)!.trim();
       final epNum = episodeMatch.group(2)!.trim();
 
+      // Try a real lookup before falling back to the file name heuristic.
+      final found = await _searchSubject(client, animeTitle, ctx);
+      if (found != null) {
+        final base = parseBangumiJson(found);
+        final baseTitle = base.proposedTitle ?? animeTitle;
+        return ScrapeResult(
+          proposedTitle: '$baseTitle 第$epNum话',
+          previewImageUrl: base.previewImageUrl,
+          fields: [
+            ...base.fields,
+            ProposedField(
+              key: 'episode',
+              valueText: epNum,
+              valueNum: double.tryParse(epNum),
+              source: 'scraper:bangumi',
+              confidence: 0.95,
+            ),
+          ],
+          tags: base.tags,
+          candidates: base.candidates,
+        );
+      }
+
       return ScrapeResult(
         proposedTitle: '$animeTitle 第$epNum话',
         fields: [
@@ -150,6 +173,64 @@ class BangumiScraper implements Scraper {
     }
 
     return const ScrapeResult();
+  }
+
+  /// Looks the anime up on Bangumi and returns the best match, or null.
+  ///
+  /// Uses the v0 search API (POST JSON); the legacy GET search endpoint has
+  /// been unreliable. A 404/empty answer simply means "no metadata", so the
+  /// caller can fall back to the file-name heuristic.
+  Future<Map<String, dynamic>?> _searchSubject(
+    http.Client client,
+    String keyword,
+    ScrapeContext ctx,
+  ) async {
+    if (keyword.trim().isEmpty) return null;
+    try {
+      final resp = await client
+          .post(
+            Uri.parse('https://api.bgm.tv/v0/search/subjects?limit=5'),
+            headers: {
+              'User-Agent': 'FileOrganizer/2.0 (desktop app)',
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: jsonEncode({
+              'keyword': keyword,
+              'sort': 'match',
+              'filter': {
+                'type': [2],
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 12));
+      if (resp.statusCode != 200) {
+        ctx.log('Bangumi search: HTTP ${resp.statusCode}');
+        return null;
+      }
+      final data =
+          jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      final list = data['data'] as List<dynamic>? ?? const [];
+      if (list.isEmpty) return null;
+
+      // Prefer an exact name/name_cn match, otherwise the first result.
+      final lower = keyword.toLowerCase();
+      for (final item in list) {
+        if (item is! Map) continue;
+        final names = [
+          item['name']?.toString().toLowerCase(),
+          item['name_cn']?.toString().toLowerCase(),
+        ];
+        if (names.contains(lower)) {
+          return Map<String, dynamic>.from(item);
+        }
+      }
+      final first = list.first;
+      return first is Map ? Map<String, dynamic>.from(first) : null;
+    } catch (e) {
+      ctx.log('Bangumi search failed: $e');
+      return null;
+    }
   }
 
   ScrapeResult parseBangumiJson(Map<String, dynamic> data) {

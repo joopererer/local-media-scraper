@@ -2,7 +2,7 @@ name: scraper_core
 description: >-
   App-agnostic metadata scraping engine: a small Dart contract, built-in site
   scrapers, and a declarative YAML plugin format with hot reload.
-version: 0.1.1
+version: 0.2.0
 repository: https://github.com/joopererer/local-media-scraper
 issue_tracker: https://github.com/joopererer/local-media-scraper/issues
 

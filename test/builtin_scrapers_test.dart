@@ -136,4 +136,209 @@ void main() {
       expect(result.previewImageUrl, 'https://example.com/a/cover.png');
     });
   });
+
+  group('DoubanScraper', () {
+    test('searches by film name and reads the rexxar JSON', () async {
+      final urls = <String>[];
+      final client = MockClient((request) async {
+        urls.add(request.url.toString());
+        if (request.url.host == 'movie.douban.com' &&
+            request.url.path == '/j/subject_suggest') {
+          return http.Response(
+            '[{"id":"1292064","title":"楚门的世界","year":"1998",'
+            '"type":"movie","sub_title":"The Truman Show"}]',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.host == 'm.douban.com' &&
+            request.url.path == '/rexxar/api/v2/movie/1292064') {
+          return http.Response(
+            '{"title":"楚门的世界","year":"1998","original_title":'
+            '"The Truman Show","rating":{"value":9.4},'
+            '"pic":{"large":"https://img3.doubanio.com/l.jpg"},'
+            '"genres":["剧情","科幻"],'
+            '"directors":[{"name":"彼得·威尔"}],'
+            '"actors":[{"name":"金·凯瑞"}],"intro":"概要"}',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('', 404);
+      });
+
+      final result = await DoubanScraper(client: client).scrape(
+        const ScrapeInput(
+          subject: ScrapeSubject(id: 'd1'),
+          fileName: '楚门的世界.mp4',
+        ),
+        const ScrapeContext(),
+      );
+
+      expect(result.proposedTitle, '楚门的世界');
+      expect(result.previewImageUrl, 'https://img3.doubanio.com/l.jpg');
+      expect(
+        result.fields.firstWhere((f) => f.key == 'douban_rating').valueNum,
+        9.4,
+      );
+      expect(
+        result.fields.firstWhere((f) => f.key == 'director').entityName,
+        '彼得·威尔',
+      );
+      expect(
+        result.tags.map((t) => t.tagPath.join('/')),
+        containsAll(<String>['影视', '影视/剧情', '豆瓣']),
+      );
+      expect(urls.first, contains('subject_suggest'));
+    });
+
+    test('treats a PDF as a book lookup', () async {
+      final hosts = <String>[];
+      final client = MockClient((request) async {
+        hosts.add(request.url.host);
+        if (request.url.host == 'book.douban.com') {
+          return http.Response(
+            '[{"id":"1090109","title":"红岩","year":"1961","type":"b"}]',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response(
+          '{"title":"红岩","year":"1961","rating":{"value":7.8},'
+          '"pic":{"large":"https://img9.doubanio.com/s21406804.jpg"},'
+          '"author":[{"name":"罗广斌"}]}',
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+
+      final scraper = DoubanScraper(client: client);
+      const input = ScrapeInput(
+        subject: ScrapeSubject(id: 'b1', mediaType: 'document'),
+        fileName: '红岩.pdf',
+      );
+
+      expect(scraper.canHandle(input), isTrue);
+      final result = await scraper.scrape(input, const ScrapeContext());
+
+      expect(hosts.first, 'book.douban.com');
+      expect(result.proposedTitle, '红岩');
+      expect(
+        result.fields.firstWhere((f) => f.key == 'author').entityName,
+        '罗广斌',
+      );
+      expect(result.tags.map((t) => t.tagPath.join('/')), contains('图书'));
+    });
+
+    test('ignores camera dumps and untitled files', () {
+      final scraper = DoubanScraper();
+      expect(
+        scraper.canHandle(
+          const ScrapeInput(
+            subject: ScrapeSubject(id: 'x'),
+            fileName: 'IMG_1234.mp4',
+          ),
+        ),
+        isFalse,
+      );
+      expect(
+        scraper.canHandle(
+          const ScrapeInput(
+            subject: ScrapeSubject(id: 'y'),
+            fileName: 'untitled.mkv',
+          ),
+        ),
+        isFalse,
+      );
+    });
+
+    test('falls back to the tv endpoint when the id is a series', () async {
+      final client = MockClient((request) async {
+        if (request.url.path.endsWith('/movie/3070706')) {
+          return http.Response('', 404);
+        }
+        if (request.url.path.endsWith('/tv/3070706')) {
+          return http.Response(
+            '{"title":"红岩","year":"1999","rating":{"value":8.1},'
+            '"pic":{"large":"https://img1.doubanio.com/tv.jpg"}}',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('', 404);
+      });
+
+      final result = await DoubanScraper(client: client).scrape(
+        const ScrapeInput(
+          subject: ScrapeSubject(id: 't1'),
+          fileName: '[douban:3070706] 红岩.mp4',
+        ),
+        const ScrapeContext(),
+      );
+
+      expect(result.proposedTitle, '红岩');
+      expect(result.previewImageUrl, 'https://img1.doubanio.com/tv.jpg');
+    });
+  });
+
+  group('BangumiScraper', () {
+    test('searches by anime name and keeps the episode number', () async {
+      final client = MockClient((request) async {
+        if (request.url.path == '/v0/search/subjects') {
+          return http.Response(
+            '{"data":[{"id":400602,"name":"葬送のフリーレン",'
+            '"name_cn":"葬送的芙莉莲","date":"2023-09-29",'
+            '"rating":{"score":8.5},'
+            '"images":{"large":"https://lain.bgm.tv/l.jpg"},'
+            '"tags":[{"name":"奇幻"}]}]}',
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('', 404);
+      });
+
+      final result = await BangumiScraper(client: client).scrape(
+        const ScrapeInput(
+          subject: ScrapeSubject(id: 'bg1'),
+          fileName: '[Nekomoe] Frieren - 01 [1080p].mp4',
+        ),
+        const ScrapeContext(),
+      );
+
+      expect(result.proposedTitle, '葬送的芙莉莲 第01话');
+      expect(result.previewImageUrl, 'https://lain.bgm.tv/l.jpg');
+      expect(
+        result.fields.firstWhere((f) => f.key == 'episode').valueText,
+        '01',
+      );
+      expect(
+        result.fields.firstWhere((f) => f.key == 'bangumi_rating').valueNum,
+        8.5,
+      );
+    });
+
+    test(
+      'keeps the file-name heuristic when the search finds nothing',
+      () async {
+        final client = MockClient(
+          (_) async => http.Response('{"data":[]}', 200),
+        );
+
+        final result = await BangumiScraper(client: client).scrape(
+          const ScrapeInput(
+            subject: ScrapeSubject(id: 'bg2'),
+            fileName: '[Sub] Unknown Show - 03 [1080p].mp4',
+          ),
+          const ScrapeContext(),
+        );
+
+        expect(result.proposedTitle, 'Unknown Show 第03话');
+        expect(
+          result.fields.firstWhere((f) => f.key == 'anime_title').valueText,
+          'Unknown Show',
+        );
+      },
+    );
+  });
 }
